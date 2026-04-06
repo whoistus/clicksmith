@@ -1,0 +1,27 @@
+{
+  "name": "chrome-like-a-human",
+  "version": "0.1.0",
+  "description": "Chrome extension MCP server for human-like QA testing",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "build:host": "tsc -p tsconfig.json",
+    "install:host": "node scripts/install.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.1.1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
