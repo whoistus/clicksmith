@@ -13,7 +13,8 @@
 | Date | 2026-04-06 |
 | Priority | P1 |
 | Effort | 1 week |
-| Status | pending |
+| Status | done |
+| Completed | 2026-04-06 |
 | Description | Add assertion tools, wait utilities, network/console capture, and observation tools |
 
 ## Key Insights
@@ -154,16 +155,16 @@ Add message types: `ASSERT_VISIBLE`, `ASSERT_TEXT`, `ASSERT_URL`, `ASSERT_NETWOR
 
 ## Todo
 
-- [ ] Network capture module (CDP Network domain + ring buffer)
-- [ ] Console capture module (CDP Runtime domain + ring buffer)
-- [ ] Content script assertion handlers (visible, text, count)
-- [ ] Background assertion handlers (url, network)
-- [ ] Wait utilities (wait_for, wait_for_network)
-- [ ] get_text, get_url observation tools
-- [ ] get_network_log, get_console_log observation tools
-- [ ] MCP tool registrations (12 tools)
-- [ ] Protocol type updates
-- [ ] Integration test: navigate -> click -> assert_text -> assert_url flow
+- [x] Network capture module (CDP Network domain + ring buffer)
+- [x] Console capture module (CDP Runtime domain + ring buffer)
+- [x] Content script assertion handlers (visible, text, count)
+- [x] Background assertion handlers (url, network)
+- [x] Wait utilities (wait_for, wait_for_network)
+- [x] get_text, get_url observation tools
+- [x] get_network_log, get_console_log observation tools
+- [x] MCP tool registrations (12 tools)
+- [x] Protocol type updates
+- [x] Integration test: navigate -> click -> assert_text -> assert_url flow
 
 ## Success Criteria
 

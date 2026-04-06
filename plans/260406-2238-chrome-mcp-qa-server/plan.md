@@ -40,7 +40,7 @@ scripts/           - Install & build scripts
 | # | Phase | Effort | Status | File |
 |---|-------|--------|--------|------|
 | 1 | Foundation: Extension + Native Messaging + MCP + Core Tools | 2w | done | [phase-01](./phase-01-foundation.md) |
-| 2 | QA Assertions + Network/Console Capture | 1w | pending | [phase-02](./phase-02-qa-assertions.md) |
+| 2 | QA Assertions + Network/Console Capture | 1w | done | [phase-02](./phase-02-qa-assertions.md) |
 | 3 | Test Generation + Session Recording | 1w | pending | [phase-03](./phase-03-test-generation.md) |
 | 4 | Polish: Shadow DOM, Iframes, SPA, Multi-Tab, Sidebar | 1w | pending | [phase-04](./phase-04-polish.md) |
 
