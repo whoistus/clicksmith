@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * MCP server for Chrome Like a Human.
- * Registers 6 core tools, routes calls through native messaging bridge to Chrome extension.
+ * Registers 17 tools (6 core + 11 QA), routes calls through WebSocket bridge to Chrome extension.
  * Transport: stdio (JSON-RPC via @modelcontextprotocol/sdk).
  * IMPORTANT: All logging to stderr only — stdout is reserved for MCP protocol.
  */
@@ -71,74 +71,29 @@ onExtensionMessage((msg: ExtensionResponse) => {
   }
 });
 
-// MCP tool definitions
-const TOOLS = [
-  {
-    name: 'navigate',
-    description: 'Navigate the active tab to a URL and wait for page load.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        url: { type: 'string', description: 'The URL to navigate to' },
-      },
-      required: ['url'],
-    },
-  },
-  {
-    name: 'snapshot',
-    description: 'Get the accessibility tree of the current page as structured text. Returns ARIA roles, names, and states in an indented tree format.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        depth: { type: 'number', description: 'Max tree depth (omit for full tree)' },
-      },
-    },
-  },
-  {
-    name: 'screenshot',
-    description: 'Capture a screenshot of the visible viewport. Returns base64-encoded PNG.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {},
-    },
-  },
-  {
-    name: 'click',
-    description: 'Click an element found by ARIA role and accessible name.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        role: { type: 'string', description: 'ARIA role (e.g., button, link, checkbox)' },
-        name: { type: 'string', description: 'Accessible name (label text, aria-label, etc.)' },
-      },
-      required: ['role', 'name'],
-    },
-  },
-  {
-    name: 'type',
-    description: 'Type text into an input element found by ARIA role and accessible name.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        role: { type: 'string', description: 'ARIA role (e.g., textbox, combobox, searchbox)' },
-        name: { type: 'string', description: 'Accessible name of the input field' },
-        text: { type: 'string', description: 'Text to type into the field' },
-      },
-      required: ['role', 'name', 'text'],
-    },
-  },
-  {
-    name: 'press_key',
-    description: 'Press a keyboard key on the currently focused element or page.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        key: { type: 'string', description: 'Key name (e.g., Enter, Escape, Tab, ArrowDown)' },
-      },
-      required: ['key'],
-    },
-  },
-];
+import { ALL_TOOLS } from './tool-definitions.js';
+
+// Map tool name -> MessageType for routing
+const TOOL_TYPE_MAP: Record<string, MessageType> = {
+  navigate: MessageType.NAVIGATE,
+  snapshot: MessageType.SNAPSHOT,
+  screenshot: MessageType.SCREENSHOT,
+  click: MessageType.CLICK,
+  type: MessageType.TYPE,
+  press_key: MessageType.PRESS_KEY,
+  // Phase 2
+  assert_visible: MessageType.ASSERT_VISIBLE,
+  assert_text: MessageType.ASSERT_TEXT,
+  assert_url: MessageType.ASSERT_URL,
+  assert_network: MessageType.ASSERT_NETWORK,
+  assert_count: MessageType.ASSERT_COUNT,
+  wait_for: MessageType.WAIT_FOR,
+  wait_for_network: MessageType.WAIT_FOR_NETWORK,
+  get_text: MessageType.GET_TEXT,
+  get_url: MessageType.GET_URL,
+  get_network_log: MessageType.GET_NETWORK_LOG,
+  get_console_log: MessageType.GET_CONSOLE_LOG,
+};
 
 // Create and configure MCP server
 const server = new Server(
@@ -147,23 +102,16 @@ const server = new Server(
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: TOOLS,
+  tools: ALL_TOOLS,
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
-    let messageType: MessageType;
-    switch (name) {
-      case 'navigate': messageType = MessageType.NAVIGATE; break;
-      case 'snapshot': messageType = MessageType.SNAPSHOT; break;
-      case 'screenshot': messageType = MessageType.SCREENSHOT; break;
-      case 'click': messageType = MessageType.CLICK; break;
-      case 'type': messageType = MessageType.TYPE; break;
-      case 'press_key': messageType = MessageType.PRESS_KEY; break;
-      default:
-        return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
+    const messageType = TOOL_TYPE_MAP[name];
+    if (!messageType) {
+      return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
     }
 
     const result = await callExtension({ type: messageType, ...args });

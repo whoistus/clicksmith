@@ -200,15 +200,124 @@ function handlePressKey(msg) {
   return { data: `Pressed key "${msg.key}"` };
 }
 
+// --- Visibility Check ---
+
+function isElementVisible(el) {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+  // offsetParent null means hidden (except for body/html/fixed)
+  if (!el.offsetParent && style.position !== 'fixed' && el.tagName !== 'BODY' && el.tagName !== 'HTML') return false;
+  return true;
+}
+
+// --- Find ALL elements matching role + name ---
+
+function findAllByRoleAndName(role, name) {
+  const allElements = document.querySelectorAll('*');
+  const nameLower = name.toLowerCase();
+  const matches = [];
+  for (const el of allElements) {
+    const elRole = getRole(el);
+    if (elRole !== role) continue;
+    const elName = getAccessibleName(el).toLowerCase();
+    if (elName === nameLower || elName.includes(nameLower)) matches.push(el);
+  }
+  return matches;
+}
+
+// --- Assertion Handlers ---
+
+function handleAssertVisible(msg) {
+  const el = findByRoleAndName(msg.role, msg.name);
+  if (!el) return { data: { pass: false, message: `No element found with role="${msg.role}" name="${msg.name}"` } };
+  const visible = isElementVisible(el);
+  return {
+    data: {
+      pass: visible,
+      message: visible
+        ? `Element ${msg.role} "${msg.name}" is visible`
+        : `Element ${msg.role} "${msg.name}" exists but is not visible`,
+    },
+  };
+}
+
+function handleAssertText(msg) {
+  const el = findByRoleAndName(msg.role, msg.name);
+  if (!el) return { data: { pass: false, message: `No element found with role="${msg.role}" name="${msg.name}"` } };
+  const actual = el.textContent.trim();
+  const pass = actual.includes(msg.expected);
+  return {
+    data: {
+      pass,
+      message: pass
+        ? `Text matches: "${msg.expected}" found in ${msg.role} "${msg.name}"`
+        : `Expected "${msg.expected}" but got "${actual.substring(0, 200)}"`,
+    },
+  };
+}
+
+function handleAssertCount(msg) {
+  const matches = findAllByRoleAndName(msg.role, msg.name);
+  const actual = matches.length;
+  const pass = actual === msg.count;
+  return {
+    data: {
+      pass,
+      message: pass
+        ? `Count matches: ${actual} element(s) with role="${msg.role}" name="${msg.name}"`
+        : `Expected ${msg.count} but found ${actual} element(s) with role="${msg.role}" name="${msg.name}"`,
+    },
+  };
+}
+
+function handleGetText(msg) {
+  const el = findByRoleAndName(msg.role, msg.name);
+  if (!el) return { error: `No element found with role="${msg.role}" name="${msg.name}"` };
+  return { data: { text: el.textContent.trim() } };
+}
+
+// --- Wait Handlers (async with polling) ---
+
+function handleWaitFor(msg, sendResponse) {
+  const timeout = msg.timeout || 5000;
+  const interval = 200;
+  const start = Date.now();
+
+  const poll = () => {
+    const el = findByRoleAndName(msg.role, msg.name);
+    if (el && isElementVisible(el)) {
+      sendResponse({ data: { found: true, message: `Element ${msg.role} "${msg.name}" appeared` } });
+      return;
+    }
+    if (Date.now() - start >= timeout) {
+      sendResponse({ data: { found: false, message: `Timeout: ${msg.role} "${msg.name}" not found after ${timeout}ms` } });
+      return;
+    }
+    setTimeout(poll, interval);
+  };
+  poll();
+}
+
 // --- Message Listener ---
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   try {
+    // Async handlers that call sendResponse themselves
+    if (msg.type === 'wait_for') {
+      handleWaitFor(msg, sendResponse);
+      return true;
+    }
+
     let result;
     switch (msg.type) {
       case 'click': result = handleClick(msg); break;
       case 'type': result = handleType(msg); break;
       case 'press_key': result = handlePressKey(msg); break;
+      case 'assert_visible': result = handleAssertVisible(msg); break;
+      case 'assert_text': result = handleAssertText(msg); break;
+      case 'assert_count': result = handleAssertCount(msg); break;
+      case 'get_text': result = handleGetText(msg); break;
       default:
         result = { error: `Unknown content action: ${msg.type}` };
     }
@@ -216,5 +325,5 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   } catch (err) {
     sendResponse({ error: err.message });
   }
-  return true; // keep channel open for async
+  return true;
 });

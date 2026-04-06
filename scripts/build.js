@@ -34,7 +34,7 @@ const extDist = join(root, 'dist', 'extension');
 
 mkdirSync(extDist, { recursive: true });
 
-const extensionFiles = ['manifest.json', 'background.js', 'content.js'];
+const extensionFiles = ['manifest.json', 'background.js', 'content.js', 'network-capture.js', 'console-capture.js'];
 for (const file of extensionFiles) {
   const src = join(extSrc, file);
   const dest = join(extDist, file);
