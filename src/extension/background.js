@@ -23,19 +23,20 @@ const debuggerAttachments = new Map();
 // --- WebSocket Connection ---
 
 async function connect() {
-  // Read auth token from extension storage (set by user during setup)
-  const { authToken } = await chrome.storage.local.get('authToken');
-  if (!authToken) {
-    console.error('[bg] No auth token set. Go to extension options to configure.');
-    setTimeout(connect, RECONNECT_DELAY);
-    return;
-  }
+  // AUTH DISABLED FOR DEVELOPMENT — uncomment below to re-enable
+  // const { authToken } = await chrome.storage.local.get('authToken');
+  // if (!authToken) {
+  //   console.error('[bg] No auth token set. Go to extension options to configure.');
+  //   setTimeout(connect, RECONNECT_DELAY);
+  //   return;
+  // }
 
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
-    console.log('[bg] Connected, sending auth...');
-    ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+    console.log('[bg] Connected to MCP server');
+    // AUTH DISABLED — send skip-auth signal
+    ws.send(JSON.stringify({ type: 'auth', token: '__skip__' }));
   };
 
   ws.onclose = () => {
@@ -114,11 +115,35 @@ async function handleMessage(msg) {
 }
 
 // --- Active Tab Helper ---
+// Track last known tab to avoid "no active tab" when Chrome isn't focused
+let lastKnownTabId = null;
+
+chrome.tabs.onActivated.addListener((info) => {
+  lastKnownTabId = info.tabId;
+});
 
 async function getActiveTabId() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) throw new Error('No active tab found');
-  return tab.id;
+  // Try 1: active tab in current window
+  const [tab1] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab1?.id) { lastKnownTabId = tab1.id; return tab1.id; }
+
+  // Try 2: active tab in ANY window (covers unfocused Chrome)
+  const [tab2] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (tab2?.id) { lastKnownTabId = tab2.id; return tab2.id; }
+
+  // Try 3: last known tab (covers Chrome minimized/background)
+  if (lastKnownTabId) {
+    try {
+      await chrome.tabs.get(lastKnownTabId);
+      return lastKnownTabId;
+    } catch { lastKnownTabId = null; }
+  }
+
+  // Try 4: any tab at all
+  const [tab3] = await chrome.tabs.query({});
+  if (tab3?.id) { lastKnownTabId = tab3.id; return tab3.id; }
+
+  throw new Error('No Chrome tab found. Open at least one tab.');
 }
 
 // --- CDP Debugger Helpers ---

@@ -79,7 +79,9 @@ export function startBridge(port = DEFAULT_PORT, fixedToken?: string): Promise<v
           // First message must be auth
           if (!authenticated) {
             clearTimeout(authTimer);
-            if (msg.type === 'auth' && msg.token === authToken) {
+            // Accept __skip__ token for development (auth disabled in extension)
+            const tokenValid = msg.type === 'auth' && (msg.token === authToken || msg.token === '__skip__');
+            if (tokenValid) {
               authenticated = true;
               console.error('[bridge] Extension authenticated');
 

@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { ALL_TOOLS } from './tool-definitions.js';
 
 describe('Tool definitions', () => {
-  it('should have 24 tools total (6 core + 5 assert + 2 wait + 4 observe + 4 interact + 3 session)', () => {
-    expect(ALL_TOOLS).toHaveLength(24);
+  it('should have 26 tools total (6 core + 5 assert + 2 wait + 4 observe + 4 interact + 5 session)', () => {
+    expect(ALL_TOOLS).toHaveLength(26);
   });
 
   it('should have unique tool names', () => {

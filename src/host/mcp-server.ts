@@ -149,7 +149,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 }));
 
 // Host-only tools (no extension message needed)
-const HOST_TOOLS = new Set(['get_session', 'clear_session', 'save_file']);
+const HOST_TOOLS = new Set(['get_session', 'clear_session', 'save_file', 'start_test', 'end_test']);
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
@@ -189,6 +189,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    sessionRecorder.recordError(message);
     return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
   }
 });
@@ -207,6 +208,15 @@ function handleHostTool(name: string, args: Record<string, unknown>) {
       const result = handleSaveFile(args as { path: string; content: string });
       const text = JSON.stringify(result, null, 2);
       return { content: [{ type: 'text', text }], isError: !result.success };
+    }
+    case 'start_test': {
+      const testName = (args.name as string) || 'Unnamed Test';
+      sessionRecorder.startTest(testName);
+      return { content: [{ type: 'text', text: `Test started: "${testName}"` }] };
+    }
+    case 'end_test': {
+      const report = sessionRecorder.getReport();
+      return { content: [{ type: 'text', text: report.summary }] };
     }
     default:
       return { content: [{ type: 'text', text: `Unknown host tool: ${name}` }], isError: true };

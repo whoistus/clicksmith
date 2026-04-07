@@ -111,8 +111,8 @@ const OBSERVATION_TOOLS = [
 const INTERACTION_TOOLS = [
   {
     name: 'select_option',
-    description: 'Select an option from a dropdown (native <select> or custom). Finds element by ARIA role+name, then selects option by value or text.',
-    inputSchema: { type: obj, properties: { role: { type: 'string', description: 'ARIA role (combobox, listbox, or select element role)' }, name: { type: 'string', description: 'Accessible name of the dropdown' }, value: { type: 'string', description: 'Option value or visible text to select' } }, required: ['role', 'name', 'value'] },
+    description: 'Select option(s) from a dropdown (native <select> or custom). For multi-select, use "values" array.',
+    inputSchema: { type: obj, properties: { role: { type: 'string', description: 'ARIA role (combobox, listbox)' }, name: { type: 'string', description: 'Accessible name of dropdown' }, value: { type: 'string', description: 'Option value or text (single select)' }, values: { type: 'array', description: 'Array of values (multi-select)', items: { type: 'string' } } }, required: ['role', 'name'] },
   },
   {
     name: 'hover',
@@ -147,6 +147,16 @@ const SESSION_TOOLS = [
     name: 'save_file',
     description: 'Save content to a file on disk (e.g., generated .spec.ts test). Path must be relative to project root.',
     inputSchema: { type: obj, properties: { path: { type: 'string', description: 'Relative file path (e.g., tests/login.spec.ts)' }, content: { type: 'string', description: 'File content to write' } }, required: ['path', 'content'] },
+  },
+  {
+    name: 'start_test',
+    description: 'Start a named QA test session. Clears previous session and begins tracking steps with pass/fail status.',
+    inputSchema: { type: obj, properties: { name: { type: 'string', description: 'Test name (e.g., "Login Flow", "Checkout Process")' } }, required: ['name'] },
+  },
+  {
+    name: 'end_test',
+    description: 'End the current test session and return a structured report with pass/fail per step, evidence, and summary table.',
+    inputSchema: { type: obj, properties: {} },
   },
 ];
 

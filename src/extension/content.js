@@ -326,37 +326,58 @@ function handleSelectOption(msg) {
 
   el.scrollIntoView({ block: 'center', behavior: 'instant' });
 
+  // Support both single value (string) and multiple values (array)
+  const values = Array.isArray(msg.values) ? msg.values : [msg.value];
+
   // Native <select> element
   if (el.tagName === 'SELECT') {
     const options = Array.from(el.options);
-    const option = options.find(o => o.value === msg.value || o.textContent.trim() === msg.value);
-    if (!option) return { error: `Option "${msg.value}" not found in select` };
-    el.value = option.value;
+    const selected = [];
+
+    // For multi-select: toggle requested options
+    if (el.multiple) {
+      for (const opt of options) {
+        const matchText = opt.textContent.trim().toLowerCase();
+        const matchVal = opt.value.toLowerCase();
+        const shouldSelect = values.some(v => v.toLowerCase() === matchText || v.toLowerCase() === matchVal);
+        if (shouldSelect) { opt.selected = true; selected.push(opt.value); }
+      }
+    } else {
+      // Single select: find matching option
+      const target = values[0];
+      const option = options.find(o => o.value === target || o.textContent.trim().toLowerCase() === target.toLowerCase());
+      if (!option) return { error: `Option "${target}" not found in select` };
+      el.value = option.value;
+      selected.push(option.value);
+    }
+
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.dispatchEvent(new Event('input', { bubbles: true }));
-    return { data: { success: true, selectedValue: option.value } };
+    return { data: { success: true, selectedValue: selected.length === 1 ? selected[0] : selected } };
   }
 
-  // Custom dropdown: click to open, find option, click it
+  // Custom dropdown: click to open, search portals + deep DOM for option
   el.click();
-  // Wait briefly for dropdown to open, then find option
   return new Promise((resolve) => {
     setTimeout(() => {
-      // Look for option/listbox items matching the value text
+      // Search entire document (portals render at body level, not under trigger)
       const allEls = deepQueryAll(document);
-      const target = allEls.find(candidate => {
-        const role = getRole(candidate);
-        if (!['option', 'listitem', 'menuitem'].includes(role)) return false;
-        return candidate.textContent.trim().toLowerCase() === msg.value.toLowerCase();
+      const target = values[0]?.toLowerCase();
+      const match = allEls.find(candidate => {
+        const r = getRole(candidate);
+        if (!['option', 'listitem', 'menuitem', 'treeitem'].includes(r)) return false;
+        const text = candidate.textContent.trim().toLowerCase();
+        const val = candidate.getAttribute('data-value')?.toLowerCase();
+        return text === target || val === target;
       });
-      if (target) {
-        target.scrollIntoView({ block: 'center', behavior: 'instant' });
-        target.click();
-        resolve({ data: { success: true, selectedValue: msg.value } });
+      if (match) {
+        match.scrollIntoView({ block: 'center', behavior: 'instant' });
+        match.click();
+        resolve({ data: { success: true, selectedValue: values[0] } });
       } else {
-        resolve({ error: `Option "${msg.value}" not found in custom dropdown` });
+        resolve({ error: `Option "${values[0]}" not found in dropdown. Searched ${allEls.length} elements.` });
       }
-    }, 300); // allow dropdown animation
+    }, 300);
   });
 }
 
