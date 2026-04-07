@@ -39,9 +39,12 @@ export function getAuthToken(): string | null {
   return authToken;
 }
 
-/** Start WebSocket server and wait for extension to connect. */
-export function startBridge(port = DEFAULT_PORT): Promise<void> {
-  authToken = generateToken();
+/** Start WebSocket server and wait for extension to connect.
+ *  @param port - WebSocket port
+ *  @param fixedToken - optional fixed token (skip random generation)
+ */
+export function startBridge(port = DEFAULT_PORT, fixedToken?: string): Promise<void> {
+  authToken = fixedToken || generateToken();
 
   return new Promise((resolve, reject) => {
     wss = new WebSocketServer({ port, host: '127.0.0.1' });
