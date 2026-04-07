@@ -3,7 +3,7 @@
  * Ring buffer keeps last N entries to prevent unbounded memory growth.
  */
 
-const MAX_ENTRIES = 200;
+const CONSOLE_MAX_ENTRIES = 200;
 
 class ConsoleCapture {
   constructor() {
@@ -56,7 +56,7 @@ class ConsoleCapture {
       timestamp: Math.floor(timestamp),
     });
 
-    if (this._entries.length > MAX_ENTRIES) {
+    if (this._entries.length > CONSOLE_MAX_ENTRIES) {
       this._entries.shift();
     }
   }

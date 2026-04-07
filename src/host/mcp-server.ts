@@ -211,8 +211,15 @@ function handleHostTool(name: string, args: Record<string, unknown>) {
     }
     case 'start_test': {
       const testName = (args.name as string) || 'Unnamed Test';
-      sessionRecorder.startTest(testName);
-      return { content: [{ type: 'text', text: `Test started: "${testName}"` }] };
+      sessionRecorder.startTest(testName, {
+        description: args.description as string | undefined,
+        precondition: args.precondition as string | undefined,
+        steps: args.steps as string | undefined,
+        expected: args.expected as string | undefined,
+      });
+      const parts = [`Test started: "${testName}"`];
+      if (args.expected) parts.push(`Expected: ${args.expected}`);
+      return { content: [{ type: 'text', text: parts.join('\n') }] };
     }
     case 'end_test': {
       const report = sessionRecorder.getReport();

@@ -4,7 +4,7 @@
  * Security: captures URL + method + status only, NOT headers/bodies by default.
  */
 
-const MAX_ENTRIES = 100;
+const NETWORK_MAX_ENTRIES = 100;
 const PENDING_TTL = 60_000; // evict pending entries older than 60s
 
 /**
@@ -111,7 +111,7 @@ class NetworkCapture {
   /** Add entry to ring buffer, evict oldest if full. */
   _push(entry) {
     this._entries.push(entry);
-    if (this._entries.length > MAX_ENTRIES) {
+    if (this._entries.length > NETWORK_MAX_ENTRIES) {
       this._entries.shift();
     }
   }

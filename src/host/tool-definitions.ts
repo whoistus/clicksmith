@@ -150,12 +150,22 @@ const SESSION_TOOLS = [
   },
   {
     name: 'start_test',
-    description: 'Start a named QA test session. Clears previous session and begins tracking steps with pass/fail status.',
-    inputSchema: { type: obj, properties: { name: { type: 'string', description: 'Test name (e.g., "Login Flow", "Checkout Process")' } }, required: ['name'] },
+    description: 'Start a named QA test case. Provide description, precondition, steps, and expected result for structured test case reporting. Clears previous session.',
+    inputSchema: {
+      type: obj,
+      properties: {
+        name: { type: 'string', description: 'Test case title (e.g., "Create Employee")' },
+        description: { type: 'string', description: 'What this test case verifies (e.g., "User creates an employee with valid data")' },
+        precondition: { type: 'string', description: 'Pre-conditions (e.g., "User already logs in")' },
+        steps: { type: 'string', description: 'Planned test steps (e.g., "1. Navigate to settings 2. Click Add Employee 3. Fill details 4. Save")' },
+        expected: { type: 'string', description: 'Expected result (e.g., "Employee is created successfully")' },
+      },
+      required: ['name'],
+    },
   },
   {
     name: 'end_test',
-    description: 'End the current test session and return a structured report with pass/fail per step, evidence, and summary table.',
+    description: 'End the current test session. Compares expected vs actual results and returns a QA test case report with verdict (SUCCESS/FAIL), evidence, and grouped test steps.',
     inputSchema: { type: obj, properties: {} },
   },
 ];

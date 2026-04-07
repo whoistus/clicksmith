@@ -39,6 +39,8 @@ const IMPLICIT_ROLES = {
   dialog: () => 'dialog',
   details: () => 'group',
   summary: () => 'button',
+  option: () => 'option',
+  optgroup: () => 'group',
 };
 
 /** Get computed ARIA role for an element. */
@@ -93,7 +95,10 @@ function getAccessibleName(el) {
   const placeholder = el.getAttribute('placeholder');
   if (placeholder) return placeholder.trim();
 
-  // 6. Text content (for buttons, links, headings)
+  // 6. <option> — prefer label attribute, then textContent (per HTML spec)
+  if (el.tagName === 'OPTION') return el.label || el.textContent.trim();
+
+  // 7. Text content (for buttons, links, headings)
   const textRoles = ['button', 'link', 'heading', 'tab', 'menuitem', 'treeitem'];
   if (textRoles.includes(getRole(el))) {
     return el.textContent.trim();
@@ -135,7 +140,7 @@ function findByRoleAndName(role, name) {
   let partialMatch = null;
 
   for (const el of allElements) {
-    if (!el.offsetParent && el.tagName !== 'BODY' && el.tagName !== 'HTML') continue;
+    if (!el.offsetParent && el.tagName !== 'BODY' && el.tagName !== 'HTML' && el.tagName !== 'OPTION' && el.tagName !== 'OPTGROUP') continue;
     const elRole = getRole(el);
     if (elRole !== role) continue;
     const elName = getAccessibleName(el).toLowerCase();
@@ -151,6 +156,18 @@ function findByRoleAndName(role, name) {
 function handleClick(msg) {
   const el = findByRoleAndName(msg.role, msg.name);
   if (!el) return { error: `No element found with role="${msg.role}" name="${msg.name}"` };
+
+  // Native <option> inside <select>: delegate to select_option for proper event handling
+  if (el.tagName === 'OPTION' && el.closest('select')) {
+    const selectEl = el.closest('select');
+    const selectRole = getRole(selectEl);
+    const selectName = getAccessibleName(selectEl);
+    return handleSelectOption({
+      role: selectRole,
+      name: selectName,
+      value: el.textContent.trim(),
+    });
+  }
 
   // Scroll into view and click
   el.scrollIntoView({ block: 'center', behavior: 'instant' });
