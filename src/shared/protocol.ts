@@ -26,6 +26,11 @@ export enum MessageType {
   GET_URL = 'get_url',
   GET_NETWORK_LOG = 'get_network_log',
   GET_CONSOLE_LOG = 'get_console_log',
+  // Phase 4: Additional interaction
+  SELECT_OPTION = 'select_option',
+  HOVER = 'hover',
+  LIST_TABS = 'list_tabs',
+  SWITCH_TAB = 'switch_tab',
 }
 
 // Response types from extension -> host
@@ -151,6 +156,33 @@ export interface GetConsoleLogRequest {
   level?: string;
 }
 
+// Phase 4: Interaction requests
+export interface SelectOptionRequest {
+  type: MessageType.SELECT_OPTION;
+  id: string;
+  role: string;
+  name: string;
+  value: string;
+}
+
+export interface HoverRequest {
+  type: MessageType.HOVER;
+  id: string;
+  role: string;
+  name: string;
+}
+
+export interface ListTabsRequest {
+  type: MessageType.LIST_TABS;
+  id: string;
+}
+
+export interface SwitchTabRequest {
+  type: MessageType.SWITCH_TAB;
+  id: string;
+  id_tab: number;
+}
+
 export type ExtensionRequest =
   | NavigateRequest
   | SnapshotRequest
@@ -168,7 +200,11 @@ export type ExtensionRequest =
   | GetTextRequest
   | GetUrlRequest
   | GetNetworkLogRequest
-  | GetConsoleLogRequest;
+  | GetConsoleLogRequest
+  | SelectOptionRequest
+  | HoverRequest
+  | ListTabsRequest
+  | SwitchTabRequest;
 
 // Response from extension back to host
 export interface SuccessResponse {

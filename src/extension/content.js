@@ -106,12 +106,31 @@ function getAccessibleName(el) {
   return '';
 }
 
-/** Find element by ARIA role and accessible name. Case-insensitive name match. */
+// --- Deep DOM Traversal (Shadow DOM + iframes) ---
+
+/** Collect all elements, piercing open shadow roots and same-origin iframes. */
+function deepQueryAll(root) {
+  const results = [];
+  const walk = (node) => {
+    for (const el of node.querySelectorAll('*')) {
+      results.push(el);
+      // Pierce open shadow roots
+      if (el.shadowRoot) walk(el.shadowRoot);
+      // Pierce same-origin iframes
+      if (el.tagName === 'IFRAME') {
+        try { if (el.contentDocument) walk(el.contentDocument); } catch { /* cross-origin */ }
+      }
+    }
+  };
+  walk(root);
+  return results;
+}
+
+/** Find element by ARIA role and accessible name. Pierces shadow DOM + iframes. */
 function findByRoleAndName(role, name) {
-  const allElements = document.querySelectorAll('*');
+  const allElements = deepQueryAll(document);
   const nameLower = name.toLowerCase();
 
-  // Single pass: collect candidates, prefer exact match over partial
   let exactMatch = null;
   let partialMatch = null;
 
@@ -299,14 +318,87 @@ function handleWaitFor(msg, sendResponse) {
   poll();
 }
 
+// --- Select Option Handler ---
+
+function handleSelectOption(msg) {
+  const el = findByRoleAndName(msg.role, msg.name);
+  if (!el) return { error: `No element found with role="${msg.role}" name="${msg.name}"` };
+
+  el.scrollIntoView({ block: 'center', behavior: 'instant' });
+
+  // Native <select> element
+  if (el.tagName === 'SELECT') {
+    const options = Array.from(el.options);
+    const option = options.find(o => o.value === msg.value || o.textContent.trim() === msg.value);
+    if (!option) return { error: `Option "${msg.value}" not found in select` };
+    el.value = option.value;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return { data: { success: true, selectedValue: option.value } };
+  }
+
+  // Custom dropdown: click to open, find option, click it
+  el.click();
+  // Wait briefly for dropdown to open, then find option
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      // Look for option/listbox items matching the value text
+      const allEls = deepQueryAll(document);
+      const target = allEls.find(candidate => {
+        const role = getRole(candidate);
+        if (!['option', 'listitem', 'menuitem'].includes(role)) return false;
+        return candidate.textContent.trim().toLowerCase() === msg.value.toLowerCase();
+      });
+      if (target) {
+        target.scrollIntoView({ block: 'center', behavior: 'instant' });
+        target.click();
+        resolve({ data: { success: true, selectedValue: msg.value } });
+      } else {
+        resolve({ error: `Option "${msg.value}" not found in custom dropdown` });
+      }
+    }, 300); // allow dropdown animation
+  });
+}
+
+// --- Hover Handler ---
+
+function handleHover(msg) {
+  const el = findByRoleAndName(msg.role, msg.name);
+  if (!el) return { error: `No element found with role="${msg.role}" name="${msg.name}"` };
+  el.scrollIntoView({ block: 'center', behavior: 'instant' });
+  el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+  el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  return { data: `Hovered ${msg.role} "${msg.name}"` };
+}
+
+// --- SPA Navigation Detection ---
+
+(function detectSpaNavigation() {
+  let lastUrl = location.href;
+  const notify = () => {
+    if (location.href !== lastUrl) {
+      lastUrl = location.href;
+      chrome.runtime.sendMessage({ type: 'url_changed', url: lastUrl });
+    }
+  };
+  // Monkey-patch pushState/replaceState
+  const origPush = history.pushState;
+  history.pushState = function(...args) { origPush.apply(this, args); notify(); };
+  const origReplace = history.replaceState;
+  history.replaceState = function(...args) { origReplace.apply(this, args); notify(); };
+  window.addEventListener('popstate', notify);
+})();
+
 // --- Message Listener ---
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   try {
-    // Async handlers that call sendResponse themselves
-    if (msg.type === 'wait_for') {
-      handleWaitFor(msg, sendResponse);
-      return true;
+    // Async handlers
+    if (msg.type === 'wait_for') { handleWaitFor(msg, sendResponse); return true; }
+    if (msg.type === 'select_option') {
+      const result = handleSelectOption(msg);
+      if (result instanceof Promise) { result.then(sendResponse); return true; }
+      sendResponse(result); return true;
     }
 
     let result;
@@ -314,6 +406,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case 'click': result = handleClick(msg); break;
       case 'type': result = handleType(msg); break;
       case 'press_key': result = handlePressKey(msg); break;
+      case 'hover': result = handleHover(msg); break;
       case 'assert_visible': result = handleAssertVisible(msg); break;
       case 'assert_text': result = handleAssertText(msg); break;
       case 'assert_count': result = handleAssertCount(msg); break;

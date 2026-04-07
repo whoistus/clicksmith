@@ -103,6 +103,11 @@ async function handleMessage(msg) {
     case 'get_url': return handleGetUrl();
     case 'get_network_log': return handleGetNetworkLog(msg);
     case 'get_console_log': return handleGetConsoleLog(msg);
+    // Phase 4: New interaction tools
+    case 'select_option': return handleContentAction(msg);
+    case 'hover': return handleContentAction(msg);
+    case 'list_tabs': return handleListTabs();
+    case 'switch_tab': return handleSwitchTab(msg);
     default:
       throw new Error(`Unknown message type: ${msg.type}`);
   }
@@ -205,15 +210,13 @@ async function handleSnapshot(msg) {
   const tabId = await getActiveTabId();
   await ensureDebuggerAttached(tabId);
 
-  // Enable Accessibility domain
   await cdpCommand(tabId, 'Accessibility.enable');
 
-  // Get full accessibility tree
   const params = msg.depth ? { depth: msg.depth } : {};
   const result = await cdpCommand(tabId, 'Accessibility.getFullAXTree', params);
 
-  // Format tree as text
-  return formatAccessibilityTree(result.nodes);
+  // mode: "interactive" (default, token-efficient) or "full"
+  return formatAccessibilityTree(result.nodes, msg.mode || 'interactive');
 }
 
 async function handleScreenshot() {
@@ -250,72 +253,103 @@ async function handleContentAction(msg) {
 
 // --- Accessibility Tree Formatter ---
 
+/** Roles that are meaningful for QA interaction and assertion. */
+const INTERACTIVE_ROLES = new Set([
+  'button', 'link', 'textbox', 'checkbox', 'radio', 'combobox', 'listbox',
+  'slider', 'spinbutton', 'switch', 'tab', 'tablist', 'menuitem', 'menu',
+  'menubar', 'option', 'searchbox', 'treeitem',
+]);
+const LANDMARK_ROLES = new Set([
+  'banner', 'navigation', 'main', 'contentinfo', 'complementary', 'form',
+  'region', 'search', 'dialog', 'alertdialog', 'alert',
+]);
+const CONTENT_ROLES = new Set([
+  'heading', 'img', 'table', 'row', 'cell', 'list', 'listitem',
+  'status', 'progressbar', 'separator',
+]);
+
 /**
- * Convert CDP AXNode array into indented text tree.
- * Format: "  - role \"name\" [state1, state2]"
+ * Convert CDP AXNode array into compact text tree.
+ * @param {Array} nodes - AXNode array from CDP
+ * @param {string} mode - "interactive" (default, token-efficient) or "full"
  */
-function formatAccessibilityTree(nodes) {
+function formatAccessibilityTree(nodes, mode = 'interactive') {
   if (!nodes || nodes.length === 0) return '(empty accessibility tree)';
 
-  // Build parent->children map
   const childMap = new Map();
   const nodeMap = new Map();
   for (const node of nodes) {
     nodeMap.set(node.nodeId, node);
-    if (node.childIds) {
-      childMap.set(node.nodeId, node.childIds);
-    }
+    if (node.childIds) childMap.set(node.nodeId, node.childIds);
   }
 
   const lines = [];
   const rootId = nodes[0]?.nodeId;
+  let nodeCount = 0;
+  const MAX_LINES = 500; // hard cap to prevent token bloat
+
+  function isRelevant(role, name) {
+    if (mode === 'full') return true;
+    if (INTERACTIVE_ROLES.has(role)) return true;
+    if (LANDMARK_ROLES.has(role)) return true;
+    if (CONTENT_ROLES.has(role) && name) return true;
+    // Keep named static text only if short (labels, not paragraphs)
+    if (role === 'StaticText' && name && name.length <= 80) return true;
+    return false;
+  }
+
+  function getStates(node) {
+    const s = [];
+    if (!node.properties) return s;
+    for (const p of node.properties) {
+      if (p.name === 'disabled' && p.value?.value === true) s.push('disabled');
+      if (p.name === 'checked' && p.value?.value) s.push('checked');
+      if (p.name === 'expanded' && p.value?.value === true) s.push('expanded');
+      if (p.name === 'selected' && p.value?.value === true) s.push('selected');
+      if (p.name === 'required' && p.value?.value === true) s.push('required');
+    }
+    return s;
+  }
 
   function walk(nodeId, depth) {
+    if (lines.length >= MAX_LINES) return;
     const node = nodeMap.get(nodeId);
     if (!node) return;
 
     const role = node.role?.value || 'generic';
     const name = node.name?.value || '';
-    const ignored = node.ignored;
+    const value = node.value?.value || '';
 
-    // Skip ignored/generic nodes without useful info
-    if (ignored || (role === 'generic' && !name)) {
-      // Still walk children
+    // Skip ignored nodes
+    if (node.ignored) {
       const children = childMap.get(nodeId) || [];
-      for (const childId of children) walk(childId, depth);
+      for (const cid of children) walk(cid, depth);
       return;
     }
 
-    // Build state list
-    const states = [];
-    if (node.properties) {
-      for (const prop of node.properties) {
-        if (prop.value?.value === true) states.push(prop.name);
-        if (prop.name === 'checked' && prop.value?.value) states.push('checked');
-        if (prop.name === 'disabled' && prop.value?.value === true) states.push('disabled');
-        if (prop.name === 'expanded' && prop.value?.value === true) states.push('expanded');
-      }
+    const relevant = isRelevant(role, name);
+    if (relevant) {
+      nodeCount++;
+      const states = getStates(node);
+      // Compact format: "  button 'Sign in' [disabled]"
+      const indent = '  '.repeat(Math.min(depth, 8)); // cap indent depth
+      let line = `${indent}${role}`;
+      if (name) line += ` '${name.substring(0, 60)}'`; // truncate long names
+      if (value) line += ` value='${value.substring(0, 40)}'`;
+      if (states.length) line += ` [${states.join(',')}]`;
+      lines.push(line);
     }
 
-    const indent = '  '.repeat(depth);
-    const nameStr = name ? ` "${name}"` : '';
-    const stateStr = states.length > 0 ? ` [${states.join(', ')}]` : '';
-    lines.push(`${indent}- ${role}${nameStr}${stateStr}`);
-
-    // Walk children
+    // Always walk children (relevant parent may contain relevant children)
     const children = childMap.get(nodeId) || [];
-    for (const childId of children) walk(childId, depth + 1);
+    const nextDepth = relevant ? depth + 1 : depth;
+    for (const cid of children) walk(cid, nextDepth);
   }
 
   walk(rootId, 0);
 
-  // Truncate if too large (stay under 800KB for safety within 1MB limit)
-  let result = `Accessibility Tree (${nodes.length} nodes):\n${lines.join('\n')}`;
-  if (result.length > 800 * 1024) {
-    result = result.substring(0, 800 * 1024) + '\n... (truncated)';
-  }
-
-  return result;
+  const truncated = lines.length >= MAX_LINES ? '\n... (truncated at 500 nodes)' : '';
+  return `Page snapshot (${nodeCount} nodes, mode=${mode}):${truncated}\n${lines.join('\n')}`;
 }
 
 // --- CDP Event Listener (for network + console capture) ---
@@ -429,6 +463,29 @@ async function handleGetConsoleLog(msg) {
   await ensureCaptureStarted(tabId);
   return { entries: consoleCapture.getLog(msg.level) };
 }
+
+// --- Phase 4: Tab Management ---
+
+async function handleListTabs() {
+  const tabs = await chrome.tabs.query({});
+  return {
+    tabs: tabs.map(t => ({ id: t.id, title: t.title, url: t.url, active: t.active })),
+  };
+}
+
+async function handleSwitchTab(msg) {
+  const tab = await chrome.tabs.update(msg.id, { active: true });
+  if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
+  return `Switched to tab ${msg.id}: ${tab.title}`;
+}
+
+// --- SPA URL Change Listener (from content script) ---
+
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (msg.type === 'url_changed' && sender.tab) {
+    console.log(`[bg] SPA navigation: ${msg.url} (tab ${sender.tab.id})`);
+  }
+});
 
 // --- Start ---
 connect();

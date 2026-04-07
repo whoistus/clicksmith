@@ -11,6 +11,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { MessageType, ResponseType } from '../shared/protocol.js';
 import type { ExtensionRequest, ExtensionResponse } from '../shared/protocol.js';
@@ -18,6 +20,8 @@ import { writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { startBridge, onExtensionMessage, sendToExtension, isExtensionConnected, getAuthToken } from './native-messaging-bridge.js';
+import { readFileSync } from 'fs';
+import { sessionRecorder, handleSaveFile } from './host-tools.js';
 
 // Pending request callbacks keyed by request ID
 const pendingRequests = new Map<string, {
@@ -96,28 +100,78 @@ const TOOL_TYPE_MAP: Record<string, MessageType> = {
   get_url: MessageType.GET_URL,
   get_network_log: MessageType.GET_NETWORK_LOG,
   get_console_log: MessageType.GET_CONSOLE_LOG,
+  // Phase 4
+  select_option: MessageType.SELECT_OPTION,
+  hover: MessageType.HOVER,
+  list_tabs: MessageType.LIST_TABS,
+  switch_tab: MessageType.SWITCH_TAB,
 };
 
 // Create and configure MCP server
 const server = new Server(
   { name: 'chrome-like-a-human', version: '0.1.0' },
-  { capabilities: { tools: {} } }
+  { capabilities: { tools: {}, prompts: {} } }
 );
+
+// --- MCP Prompts (Phase 3) ---
+
+const __dirname_prompts = dirname(fileURLToPath(import.meta.url));
+function loadPrompt(name: string): string {
+  try {
+    return readFileSync(join(__dirname_prompts, '..', '..', '..', 'prompts', `${name}.md`), 'utf-8');
+  } catch { return `(prompt template ${name}.md not found)`; }
+}
+
+server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+  prompts: [
+    { name: 'generate_test', description: 'Generate Playwright .spec.ts from QA session transcript', arguments: [{ name: 'session_json', description: 'Session JSON (auto-injected if omitted)', required: false }] },
+    { name: 'analyze_gaps', description: 'Analyze test coverage gaps and suggest untested scenarios', arguments: [{ name: 'test_files', description: 'Existing test file contents', required: false }, { name: 'app_url', description: 'App URL being tested', required: false }] },
+  ],
+}));
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+  if (name === 'generate_test') {
+    const sessionJson = args?.session_json || JSON.stringify(sessionRecorder.getTranscript(), null, 2);
+    const template = loadPrompt('generate-test');
+    return { messages: [{ role: 'user', content: { type: 'text', text: template.replace('{{session_json}}', sessionJson) } }] };
+  }
+  if (name === 'analyze_gaps') {
+    const template = loadPrompt('analyze-gaps');
+    const text = template.replace('{{test_files}}', args?.test_files || '(none provided)').replace('{{app_url}}', args?.app_url || '(not specified)');
+    return { messages: [{ role: 'user', content: { type: 'text', text } }] };
+  }
+  throw new Error(`Unknown prompt: ${name}`);
+});
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: ALL_TOOLS,
 }));
 
+// Host-only tools (no extension message needed)
+const HOST_TOOLS = new Set(['get_session', 'clear_session', 'save_file']);
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
+    // Host-only tools
+    if (HOST_TOOLS.has(name)) {
+      return handleHostTool(name, args || {});
+    }
+
     const messageType = TOOL_TYPE_MAP[name];
     if (!messageType) {
       return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
     }
 
+    // Session recording: log the call
+    sessionRecorder.recordCall(name, (args || {}) as Record<string, unknown>);
+
     const result = await callExtension({ type: messageType, ...args });
+
+    // Session recording: log the result
+    sessionRecorder.recordResult(result);
 
     // Screenshot returns base64 image
     if (name === 'screenshot' && typeof result === 'string') {
@@ -130,7 +184,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    // All other tools return text
     const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
     return { content: [{ type: 'text', text }] };
 
@@ -139,6 +192,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
   }
 });
+
+function handleHostTool(name: string, args: Record<string, unknown>) {
+  switch (name) {
+    case 'get_session': {
+      const transcript = sessionRecorder.getTranscript();
+      return { content: [{ type: 'text', text: JSON.stringify(transcript, null, 2) }] };
+    }
+    case 'clear_session': {
+      sessionRecorder.clear();
+      return { content: [{ type: 'text', text: 'Session cleared' }] };
+    }
+    case 'save_file': {
+      const result = handleSaveFile(args as { path: string; content: string });
+      const text = JSON.stringify(result, null, 2);
+      return { content: [{ type: 'text', text }], isError: !result.success };
+    }
+    default:
+      return { content: [{ type: 'text', text: `Unknown host tool: ${name}` }], isError: true };
+  }
+}
 
 // Start server: WebSocket bridge first, then MCP stdio transport
 async function main() {

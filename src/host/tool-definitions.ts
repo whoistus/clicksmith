@@ -15,8 +15,8 @@ const CORE_TOOLS = [
   },
   {
     name: 'snapshot',
-    description: 'Get the accessibility tree of the current page as structured text with ARIA roles, names, and states.',
-    inputSchema: { type: obj, properties: { depth: { type: 'number', description: 'Max tree depth (omit for full tree)' } } },
+    description: 'Get the accessibility tree of the current page. Default mode "interactive" returns only actionable elements (buttons, links, inputs, headings) for token efficiency. Use mode "full" for complete tree.',
+    inputSchema: { type: obj, properties: { depth: { type: 'number', description: 'Max tree depth (omit for full tree)' }, mode: { type: 'string', description: '"interactive" (default, token-efficient) or "full" (complete tree)' } } },
   },
   {
     name: 'screenshot',
@@ -107,9 +107,54 @@ const OBSERVATION_TOOLS = [
   },
 ];
 
+// Phase 4: Additional interaction tools
+const INTERACTION_TOOLS = [
+  {
+    name: 'select_option',
+    description: 'Select an option from a dropdown (native <select> or custom). Finds element by ARIA role+name, then selects option by value or text.',
+    inputSchema: { type: obj, properties: { role: { type: 'string', description: 'ARIA role (combobox, listbox, or select element role)' }, name: { type: 'string', description: 'Accessible name of the dropdown' }, value: { type: 'string', description: 'Option value or visible text to select' } }, required: ['role', 'name', 'value'] },
+  },
+  {
+    name: 'hover',
+    description: 'Hover over an element found by ARIA role and accessible name. Triggers mouseenter/mouseover events.',
+    inputSchema: { type: obj, properties: { role: { type: 'string', description: 'ARIA role' }, name: { type: 'string', description: 'Accessible name' } }, required: ['role', 'name'] },
+  },
+  {
+    name: 'list_tabs',
+    description: 'List all open Chrome tabs with their id, title, URL, and active status.',
+    inputSchema: { type: obj, properties: {} },
+  },
+  {
+    name: 'switch_tab',
+    description: 'Switch to a specific Chrome tab by its ID.',
+    inputSchema: { type: obj, properties: { id: { type: 'number', description: 'Tab ID (from list_tabs)' } }, required: ['id'] },
+  },
+];
+
+// Phase 3: Session + file tools (host-only, no extension message)
+const SESSION_TOOLS = [
+  {
+    name: 'get_session',
+    description: 'Get the current QA session transcript (all tool calls + results). Use before generate_test prompt.',
+    inputSchema: { type: obj, properties: {} },
+  },
+  {
+    name: 'clear_session',
+    description: 'Clear the session transcript to start a new QA session.',
+    inputSchema: { type: obj, properties: {} },
+  },
+  {
+    name: 'save_file',
+    description: 'Save content to a file on disk (e.g., generated .spec.ts test). Path must be relative to project root.',
+    inputSchema: { type: obj, properties: { path: { type: 'string', description: 'Relative file path (e.g., tests/login.spec.ts)' }, content: { type: 'string', description: 'File content to write' } }, required: ['path', 'content'] },
+  },
+];
+
 export const ALL_TOOLS = [
   ...CORE_TOOLS,
   ...ASSERTION_TOOLS,
   ...WAIT_TOOLS,
   ...OBSERVATION_TOOLS,
+  ...INTERACTION_TOOLS,
+  ...SESSION_TOOLS,
 ];
