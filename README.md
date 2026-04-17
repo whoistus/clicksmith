@@ -1,176 +1,346 @@
 # Clicksmith
 
-Chrome extension MCP server that lets Claude test web apps in your **real Chrome browser** — with your real auth, cookies, and extensions. ARIA-first element resolution, QA assertions, network capture, and test generation.
+**Give Claude hands in your real Chrome browser.** An MCP server + Chrome extension that lets Claude click, type, test, and verify web apps using the same browser session you already have open — with your real cookies, your real logins, your real extensions.
 
-## Architecture
-
-```
-Claude Code/Desktop (MCP client)
-    | stdio (JSON-RPC)
-Node.js MCP Server (ws://127.0.0.1:9333)
-    | WebSocket + shared-secret auth
-Chrome Extension (Manifest V3)
-    | chrome.debugger CDP + DOM APIs
-Your real Chrome tabs
-```
-
-## Quick Start
-
-```bash
-# 1. Install & build
-npm install
-npm run build
-
-# 2. Run interactive setup (generates token + config)
-node scripts/install.js
-
-# 3. Follow the printed instructions
-```
-
-Or manual setup:
-
-```bash
-# Build
-npm install && npm run build
-
-# Load extension: chrome://extensions → Developer mode → Load unpacked → dist/extension/
-
-# Set auth token in extension (Service worker console):
-#   chrome.storage.local.set({ authToken: 'your-token' })
-
-# Add MCP server to Claude:
-#   claude mcp add chrome-qa node -- dist/host/host/mcp-server.js --token=your-token
-```
-
-## Tools (24)
-
-### Core Interaction
-| Tool | Description |
-|------|-------------|
-| `navigate(url)` | Go to URL, wait for load |
-| `click(role, name)` | Click element by ARIA role + name |
-| `type(role, name, text)` | Type into input field |
-| `press_key(key)` | Press keyboard key (Enter, Tab, etc.) |
-| `select_option(role, name, value)` | Select dropdown option (native + custom) |
-| `hover(role, name)` | Hover over element |
-
-### Observation
-| Tool | Description |
-|------|-------------|
-| `snapshot(mode?)` | Accessibility tree ("interactive" default, "full") |
-| `screenshot()` | Viewport capture (base64 PNG) |
-| `get_text(role, name)` | Get element text content |
-| `get_url()` | Current page URL |
-| `get_network_log(filter?)` | Recent XHR/fetch requests |
-| `get_console_log(level?)` | Console messages |
-
-### QA Assertions
-| Tool | Description |
-|------|-------------|
-| `assert_visible(role, name)` | Element exists and visible |
-| `assert_text(role, name, expected)` | Element contains text |
-| `assert_url(pattern)` | URL matches regex |
-| `assert_network(url_pattern, status?)` | Network request captured |
-| `assert_count(role, name, count)` | Element count matches |
-
-### Wait
-| Tool | Description |
-|------|-------------|
-| `wait_for(role, name, timeout?)` | Wait for element to appear |
-| `wait_for_network(url_pattern, timeout?)` | Wait for network request |
-
-### Session & Files
-| Tool | Description |
-|------|-------------|
-| `get_session()` | Get QA session transcript (all tool calls) |
-| `clear_session()` | Reset session transcript |
-| `save_file(path, content)` | Write file to disk (e.g., generated tests) |
-
-### Tab Management
-| Tool | Description |
-|------|-------------|
-| `list_tabs()` | List all open tabs |
-| `switch_tab(id)` | Switch to specific tab |
-
-## MCP Prompts (2)
-
-| Prompt | Description |
-|--------|-------------|
-| `generate_test` | Convert session transcript to Playwright .spec.ts |
-| `analyze_gaps` | Suggest untested scenarios from existing coverage |
-
-## Example Test Flow
+Unlike headless browser automation (Playwright, Puppeteer), Clicksmith drives the Chrome window in front of you. Claude sees what you see. Perfect for QA testing, form filling, end-to-end verification, and design QA.
 
 ```
-You: Use chrome-qa to test login on https://myapp.com
+You: "Test the login flow on localhost:3000, then verify the dashboard loads."
 
 Claude:
-1. navigate("https://myapp.com/login")
-2. snapshot()  → sees textbox "Email", textbox "Password", button "Sign in"
-3. type("textbox", "Email", "user@test.com")
-4. type("textbox", "Password", "password123")
-5. click("button", "Sign in")
-6. wait_for("heading", "Dashboard")
-7. assert_url("/dashboard")
-8. assert_visible("heading", "Dashboard")
-9. get_session()  → full transcript
-10. → generate_test prompt → Playwright .spec.ts
-11. save_file("tests/login.spec.ts", generatedCode)
+  1. navigate("http://localhost:3000/login")
+  2. type("textbox", "Email", "user@test.com")
+  3. type("textbox", "Password", "hunter2")
+  4. click("button", "Sign in")
+  5. wait_for("heading", "Dashboard")
+  6. assert_url("/dashboard")
+  → Test passed. Report saved.
 ```
 
-## Features
+---
 
-- **ARIA-first**: finds elements by role + accessible name, not CSS selectors
-- **Real browser**: your actual Chrome with real auth, cookies, extensions
-- **Shadow DOM**: pierces open shadow roots automatically
-- **SPA support**: detects pushState/replaceState navigation
-- **iframe support**: traverses same-origin iframes
-- **Token-efficient snapshots**: interactive mode shows only actionable elements (~70% reduction)
-- **Network capture**: ring buffer of recent XHR/fetch with status codes
-- **Console capture**: recent console output by level
-- **Session recording**: automatic transcript of all tool calls for test generation
+## Why Clicksmith
 
-## Auth Token
+- **Real browser, real session.** Uses your actual Chrome with your logged-in state. Test behind auth walls without mocking.
+- **ARIA-first targeting.** `click(role, name)` instead of brittle CSS selectors. Works with React, Vue, Angular, or vanilla HTML.
+- **Batch execution.** One `batch(...)` call runs 10 actions in a single round-trip — ~8× faster for autonomous test flows.
+- **Self-correcting.** When an element lookup fails, the error lists actual candidates Claude saw — no more snapshot-retry loops.
+- **Design QA built-in.** `get_element_style` returns computed CSS + bounding box, perfect for diffing live UI against Figma designs.
+- **Zero cloud dependency.** All communication is localhost. No data leaves your machine.
 
-The WebSocket connection requires a shared secret token:
+---
+
+## Install
+
+### Prerequisites
+
+- Node.js 20 or newer
+- Chrome (or Chromium-based: Brave, Edge, Arc)
+- Claude Code or Claude Desktop
+
+### 1. Install the MCP server
 
 ```bash
-# Option A: Fixed token (recommended)
-node scripts/install.js --token=my-secret-token
-
-# Option B: Auto-generated (changes each restart)
-node scripts/install.js
+npm install -g clicksmith
 ```
 
-Both the MCP server (`--token=`) and extension (`chrome.storage.local`) must have the same token.
+### 2. Install the Chrome extension
+
+Download the latest `clicksmith-extension-v*.zip` from [Releases](https://github.com/YOUR_USER/clicksmith/releases/latest), then:
+
+```bash
+# Unzip to a location you'll keep
+unzip clicksmith-extension-v*.zip -d ~/clicksmith-extension
+```
+
+Then in Chrome:
+
+1. Open `chrome://extensions`
+2. Toggle **Developer mode** (top-right)
+3. Click **Load unpacked**
+4. Select `~/clicksmith-extension`
+
+### 3. Configure Claude
+
+**Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or equivalent:
+
+```json
+{
+  "mcpServers": {
+    "clicksmith": {
+      "command": "clicksmith"
+    }
+  }
+}
+```
+
+**Claude Code**:
+
+```bash
+claude mcp add clicksmith clicksmith
+```
+
+Restart Claude. That's it.
+
+### 4. (Optional) Lock to your extension
+
+By default the server accepts any Chrome extension connecting from localhost. To restrict to only your extension:
+
+```json
+{
+  "mcpServers": {
+    "clicksmith": {
+      "command": "clicksmith",
+      "env": { "CLICKSMITH_EXTENSION_ID": "abcdefghijklmnop..." }
+    }
+  }
+}
+```
+
+Find the id at `chrome://extensions` under the Clicksmith tile.
+
+---
+
+## Usage
+
+Ask Claude anything browser-related:
+
+```
+"Fill out the signup form at myapp.com with test data and submit it."
+"Take a screenshot of the pricing page and compare it to the Figma design."
+"Test that clicking 'Delete' actually removes the item from the list."
+"Navigate through all the tabs in settings and verify nothing 404s."
+```
+
+Claude decides which tools to use and in what order. You just describe the task.
+
+### Example: full test case
+
+```
+You: /start_test name="Create project" description="Verify a user can create a new project"
+
+You: Create a project called "Test Project" and verify it appears in the list.
+
+Claude runs the test, then:
+
+You: /end_test
+
+→ Returns a structured QA report with pass/fail, evidence, and grouped steps.
+```
+
+---
+
+## Tools
+
+28 total. Shown here grouped by purpose.
+
+### Interaction
+
+| Tool | What it does |
+|------|-------------|
+| `navigate(url)` | Go to URL, wait for load |
+| `click(role, name)` | Click by ARIA role + accessible name |
+| `type(role, name, text)` | Type into input |
+| `press_key(key)` | Enter, Tab, ArrowDown, etc. |
+| `select_option(role, name, value?, strategy?)` | Dropdown select — `exact` / `first` / `random` / `fuzzy` |
+| `hover(role, name)` | Mouse hover |
+
+### Observation
+
+| Tool | What it does |
+|------|-------------|
+| `snapshot(mode?)` | Accessibility tree (`interactive` default, or `full`) |
+| `screenshot()` | Viewport PNG |
+| `get_text(role, name)` | Element text content |
+| `get_url()` | Current page URL |
+| `get_element_style(role, name)` | Computed CSS + bounding box (for design QA) |
+| `get_network_log(filter?)` | Recent XHR/fetch requests |
+| `get_console_log(level?)` | Recent console output |
+
+### Assertions
+
+| Tool | What it does |
+|------|-------------|
+| `assert_visible(role, name)` | Element is visible |
+| `assert_text(role, name, expected)` | Element contains text |
+| `assert_url(pattern)` | URL matches regex |
+| `assert_network(url_pattern, status?)` | Network request happened |
+| `assert_count(role, name, count)` | N elements match |
+
+### Waits
+
+| Tool | What it does |
+|------|-------------|
+| `wait_for(role, name, timeout?)` | Wait for element to appear |
+| `wait_for_network(url_pattern, timeout?)` | Wait for a network request |
+
+### Tabs
+
+| Tool | What it does |
+|------|-------------|
+| `list_tabs()` | Open Chrome tabs |
+| `switch_tab(id)` | Switch active tab |
+
+### Batch & Sessions
+
+| Tool | What it does |
+|------|-------------|
+| `batch(actions, stop_on_error?, snapshot_after?)` | Run many tools in one round-trip |
+| `start_test(name, description?, ...)` | Begin structured test case |
+| `end_test()` | Return test report (pass/fail, evidence) |
+| `get_session()` | Full transcript of tool calls |
+| `clear_session()` | Reset transcript |
+| `save_file(path, content)` | Write generated test files |
+
+### MCP Prompts
+
+- `generate_test` — turn a session transcript into a Playwright `.spec.ts` file
+- `analyze_gaps` — suggest untested scenarios from existing coverage
+
+---
+
+## Features in depth
+
+### Batch mode
+
+For long deterministic flows (login, form-fill, navigation), call `batch()` instead of N individual tools:
+
+```json
+{
+  "actions": [
+    {"tool": "type", "role": "textbox", "name": "Email", "text": "x@y.z"},
+    {"tool": "type", "role": "textbox", "name": "Password", "text": "pw"},
+    {"tool": "click", "role": "button", "name": "Sign in"},
+    {"tool": "wait_for", "role": "heading", "name": "Dashboard"}
+  ]
+}
+```
+
+Returns results + final snapshot in one response. Eliminates 9 round-trips of model inference time.
+
+### Smart `select_option`
+
+Custom dropdowns (React Select, Material UI, Ant Design, base-ui) just work. Strategies:
+
+- `exact` — error if value not found (default)
+- `first` — just select the first option
+- `random` — pick one at random
+- `fuzzy` — partial/case-insensitive match, fallback to first
+
+On failure, returns `available_options` so Claude retries in one turn. Uses MutationObserver (not polling) to detect option render.
+
+### Design QA with Figma
+
+```
+You: "Compare the Save button on localhost with the 'Primary Button' 
+      component in Figma file ABC123. Report visual drift."
+
+Claude:
+  1. [figma-mcp] export component spec → design tokens
+  2. [clicksmith] get_element_style("button", "Save") → computed CSS
+  3. Diffs: background #3B82F6 vs #2563EB, padding 12px vs 16px
+  4. Proposes CSS fix
+```
+
+### Test report generation
+
+After a session, `end_test` returns a structured report. Use the `generate_test` MCP prompt to turn it into a Playwright `.spec.ts` file.
+
+---
+
+## Security
+
+**Threat model.** The real threat is a malicious webpage doing `new WebSocket('ws://127.0.0.1:9333')` to hijack your browser through Clicksmith.
+
+**Defense.** Clicksmith validates the WebSocket handshake `Origin` header. Chrome sets this server-side on every handshake and page JavaScript **cannot** forge it. Only `chrome-extension://` origins are accepted; everything else is rejected at HTTP 403 before the connection opens.
+
+**No tokens, no rotation, no friction.**
+
+**Optional hardening.** Set `CLICKSMITH_EXTENSION_ID` to lock to your exact extension id.
+
+**What Clicksmith can see.** Everything the extension has access to: any tab you have open, cookies, page content, form values. This is the point of the tool. Inspect the open-source code before installing.
+
+**What Clicksmith sends over the network.** Nothing. All communication is `127.0.0.1:9333` on localhost. No telemetry, no analytics, no cloud.
+
+**Chrome's "being controlled" bar.** Required to access the accessibility tree and execute automation. It's a browser-enforced visible indicator that automation is active — a feature, not a bug.
+
+---
 
 ## Troubleshooting
 
-| Issue | Fix |
-|-------|-----|
-| "Chrome extension not connected" | Check extension is loaded + auth token matches |
-| Yellow "debugging" bar in Chrome | Normal — required for CDP access (accessibility tree, network capture) |
-| Extension shows "Disconnected, reconnecting" | MCP server not running, or token mismatch |
-| Port 9333 conflict | Use `--port=9334` in MCP args |
-| Snapshot too large | Use default `mode: "interactive"` (only actionable elements) |
-| `select_option` fails on custom dropdown | Element must have role "combobox" or "listbox"; options need role "option" |
+| Problem | Fix |
+|---------|-----|
+| Claude says "Chrome extension not connected" | Open Chrome; verify extension is loaded at `chrome://extensions`; if recently loaded, click its icon once to wake the service worker |
+| Port 9333 already in use | Another Clicksmith or conflicting app is running. Kill it, or wait 30 seconds |
+| Extension console shows WebSocket errors | MCP server isn't running. Restart Claude Desktop / Claude Code |
+| Yellow "being debugged" bar in Chrome | Normal. Required for the accessibility APIs. Cannot be hidden by design. |
+| `select_option` can't find custom dropdown | Error response now includes candidate elements — read them, retry with the real accessible name |
+| Snapshot is too large | Default is `mode: "interactive"` which shows only actionable elements. If you need the full tree, use `mode: "full"` |
+
+---
+
+## How it works
+
+```
+Claude (Desktop or Code)
+   │ stdio / JSON-RPC
+   ▼
+Clicksmith MCP Server ──────── Node.js process
+   │ WebSocket (127.0.0.1:9333, Origin-validated)
+   ▼
+Chrome Extension (Manifest V3)
+   │ chrome.debugger CDP + DOM APIs
+   ▼
+Your Chrome tabs
+```
+
+- **MCP server:** stdio transport, 28 tools, prompts for test generation
+- **WebSocket bridge:** 127.0.0.1 only, Origin-header auth, auto-reconnect
+- **Chrome extension:** service worker + content script, keep-alive via `chrome.alarms`
+- **ARIA resolver:** deep DOM traversal including open shadow roots + same-origin iframes
+
+---
 
 ## Limitations
 
-- Cross-origin iframes not accessible (browser security)
+- Cross-origin iframes not accessible (browser security; no workaround)
 - Closed shadow DOM not traversable (by design)
-- Yellow debugger bar always visible when connected
-- One active extension connection at a time
-- `save_file` restricted to paths within project directory
+- One active MCP ↔ extension connection at a time
+- `save_file` restricted to relative paths under the project root
+- Chrome Web Store listing not yet published — install via `load unpacked` for now
+
+---
 
 ## Development
 
 ```bash
-npm run build       # Compile TS + copy extension files
-npm test            # Run vitest (35 tests)
-npm run test:watch  # Watch mode
+git clone https://github.com/YOUR_USER/clicksmith
+cd clicksmith
+npm install
+npm test              # vitest (43 tests)
+npm run build         # compile host + copy extension to dist/
+npm run package       # build + produce clicksmith-extension-v*.zip for release
 ```
+
+Source layout:
+
+```
+src/
+├── shared/      protocol types (host ↔ extension)
+├── host/        Node.js MCP server + WebSocket bridge
+└── extension/   Chrome MV3 service worker + content script
+```
+
+PRs welcome. See `CONTRIBUTING.md` (coming soon).
+
+---
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
+
+---
+
+## Credits
+
+Built with the [Model Context Protocol](https://modelcontextprotocol.io) by Anthropic. Inspired by Playwright's ARIA-first targeting.

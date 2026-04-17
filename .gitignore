@@ -4,3 +4,6 @@ dist/
 .env
 *.log
 .claude/*
+clicksmith-extension-*.zip
+auth-token.txt
+testcase.csv
