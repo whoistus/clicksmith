@@ -229,16 +229,22 @@ On failure, returns `available_options` so Claude retries in one turn. Uses Muta
 
 ### Design QA with Figma
 
+Clicksmith pairs perfectly with a Figma MCP to diff live UI against the design spec. Recommended companion: [figma-mcp-poor](https://github.com/whoistus/figma-mcp-poor) ([npm](https://www.npmjs.com/package/figma-mcp-poor)) — lightweight, no token setup, follow the repo's install instructions.
+
+With both MCPs active, prompt Claude:
+
 ```
 You: "Compare the Save button on localhost with the 'Primary Button' 
-      component in Figma file ABC123. Report visual drift."
+      component in my Figma file. Report visual drift."
 
 Claude:
-  1. [figma-mcp] export component spec → design tokens
+  1. [figma-mcp-poor] fetch component spec → design tokens
   2. [clicksmith] get_element_style("button", "Save") → computed CSS
   3. Diffs: background #3B82F6 vs #2563EB, padding 12px vs 16px
   4. Proposes CSS fix
 ```
+
+Works with any Figma MCP that exposes frame/component data.
 
 ### Test report generation
 
