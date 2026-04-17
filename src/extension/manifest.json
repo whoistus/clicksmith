@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Clicksmith",
   "description": "MCP server enabling Claude to test web apps in your real Chrome browser",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "permissions": [
     "debugger",
     "activeTab",

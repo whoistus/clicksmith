@@ -1,6 +1,6 @@
 {
   "name": "clicksmith",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server + Chrome extension that lets Claude drive your real Chrome browser for QA, testing, and design comparison. ARIA-first, batch execution, Figma-ready.",
   "keywords": [
     "mcp",
