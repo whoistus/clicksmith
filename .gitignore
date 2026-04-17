@@ -7,3 +7,5 @@ dist/
 clicksmith-extension-*.zip
 auth-token.txt
 testcase.csv
+docs/
+plans/

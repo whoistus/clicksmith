@@ -38,18 +38,12 @@ Claude:
 - Chrome (or Chromium-based: Brave, Edge, Arc)
 - Claude Code or Claude Desktop
 
-### 1. Install the MCP server
+### 1. Install the Chrome extension
+
+Download the latest `clicksmith-extension-v*.zip` from [Releases](https://github.com/whoistus/clicksmith/releases/latest), then:
 
 ```bash
-npm install -g clicksmith
-```
-
-### 2. Install the Chrome extension
-
-Download the latest `clicksmith-extension-v*.zip` from [Releases](https://github.com/YOUR_USER/clicksmith/releases/latest), then:
-
-```bash
-# Unzip to a location you'll keep
+# Unzip to a location you'll keep (extension loads FROM this folder)
 unzip clicksmith-extension-v*.zip -d ~/clicksmith-extension
 ```
 
@@ -60,7 +54,9 @@ Then in Chrome:
 3. Click **Load unpacked**
 4. Select `~/clicksmith-extension`
 
-### 3. Configure Claude
+### 2. Configure Claude
+
+No global install needed — Claude runs the MCP server via `npx`.
 
 **Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or equivalent:
 
@@ -68,7 +64,8 @@ Then in Chrome:
 {
   "mcpServers": {
     "clicksmith": {
-      "command": "clicksmith"
+      "command": "npx",
+      "args": ["-y", "clicksmith"]
     }
   }
 }
@@ -77,12 +74,12 @@ Then in Chrome:
 **Claude Code**:
 
 ```bash
-claude mcp add clicksmith clicksmith
+claude mcp add clicksmith -- npx -y clicksmith
 ```
 
-Restart Claude. That's it.
+Restart Claude. First invocation downloads `clicksmith` via npx and caches it; subsequent runs are instant.
 
-### 4. (Optional) Lock to your extension
+### 3. (Optional) Lock to your extension
 
 By default the server accepts any Chrome extension connecting from localhost. To restrict to only your extension:
 
@@ -90,7 +87,8 @@ By default the server accepts any Chrome extension connecting from localhost. To
 {
   "mcpServers": {
     "clicksmith": {
-      "command": "clicksmith",
+      "command": "npx",
+      "args": ["-y", "clicksmith"],
       "env": { "CLICKSMITH_EXTENSION_ID": "abcdefghijklmnop..." }
     }
   }
@@ -314,7 +312,7 @@ Your Chrome tabs
 ## Development
 
 ```bash
-git clone https://github.com/YOUR_USER/clicksmith
+git clone https://github.com/whoistus/clicksmith
 cd clicksmith
 npm install
 npm test              # vitest (43 tests)
@@ -338,9 +336,3 @@ PRs welcome. See `CONTRIBUTING.md` (coming soon).
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
----
-
-## Credits
-
-Built with the [Model Context Protocol](https://modelcontextprotocol.io) by Anthropic. Inspired by Playwright's ARIA-first targeting.

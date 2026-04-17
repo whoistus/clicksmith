@@ -1,15 +1,41 @@
 {
   "name": "clicksmith",
   "version": "0.1.0",
-  "description": "Chrome extension MCP server for human-like QA testing",
+  "description": "MCP server + Chrome extension that lets Claude drive your real Chrome browser for QA, testing, and design comparison. ARIA-first, batch execution, Figma-ready.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "chrome",
+    "chrome-extension",
+    "browser-automation",
+    "qa",
+    "testing",
+    "accessibility",
+    "aria",
+    "figma",
+    "design-qa"
+  ],
   "type": "module",
+  "bin": {
+    "clicksmith": "./dist/host/host/mcp-server.js"
+  },
+  "files": [
+    "dist/host/**/*.js",
+    "dist/host/**/*.d.ts",
+    "dist/extension/**",
+    "scripts/install.js",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "node scripts/build.js",
     "build:host": "tsc -p tsconfig.json",
     "package": "npm run build && node scripts/package-extension.js",
-    "install:host": "node scripts/install.js",
+    "setup": "node scripts/install.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
@@ -24,5 +50,15 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "author": "Tu Pham",
+  "license": "MIT",
+  "homepage": "https://github.com/whoistus/clicksmith#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/whoistus/clicksmith.git"
+  },
+  "bugs": {
+    "url": "https://github.com/whoistus/clicksmith/issues"
   }
 }
