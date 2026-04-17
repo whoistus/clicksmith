@@ -1,57 +1,71 @@
 /**
  * WebSocket bridge between MCP server and Chrome extension.
  *
- * Claude spawns MCP server (owns stdin/stdout for MCP protocol).
- * Extension connects to MCP server via WebSocket on localhost.
- * This module manages the WebSocket server and message routing.
+ * Trust model:
+ *   - Server binds to 127.0.0.1 only (not reachable from network)
+ *   - WebSocket handshake is validated via the Origin header, which Chrome sets
+ *     server-side and page JavaScript cannot forge. Only `chrome-extension://`
+ *     origins are accepted, which blocks the main real-world attack
+ *     (malicious webpage doing `new WebSocket('ws://127.0.0.1:9333')`).
+ *   - For exact-match hardening, set CLICKSMITH_EXTENSION_ID to the extension's
+ *     id and the server will only accept connections from that specific origin.
  *
- * Security: shared-secret token auth. Server generates random token at startup,
- * extension must send { type: "auth", token: "<token>" } as first message.
- * Unauthenticated connections are closed after 5s or on wrong token.
- *
- * MV3 service worker keepalive: Chrome 116+ extends SW lifetime while
- * WebSocket is active. We add ping/pong as safety net.
+ * Why no token:
+ *   - Tokens defend against attackers already running code on the user's
+ *     machine, which is a less-interesting threat than the webpage attack above.
+ *   - Token rotation on every server restart interrupts the user's workflow.
+ *   - Origin check is a hard Chrome-enforced boundary; no user-visible token.
  */
 
-import { randomBytes } from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
+import type { IncomingMessage } from 'http';
 import type { ExtensionRequest, ExtensionResponse } from '../shared/protocol.js';
 
 type MessageCallback = (msg: ExtensionResponse) => void;
 
 const DEFAULT_PORT = 9333;
 const PING_INTERVAL = 25_000;
-const AUTH_TIMEOUT = 5_000; // close connection if not authenticated within 5s
+const EXTENSION_ORIGIN_PREFIX = 'chrome-extension://';
 
 let wss: WebSocketServer | null = null;
 let activeSocket: WebSocket | null = null;
 let messageCallback: MessageCallback | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
-let authToken: string | null = null;
 
-/** Generate auth token. Called once at startup. */
-function generateToken(): string {
-  return randomBytes(32).toString('hex');
+/** Check whether a handshake Origin header is acceptable. */
+function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin || !origin.startsWith(EXTENSION_ORIGIN_PREFIX)) return false;
+  const requiredId = process.env.CLICKSMITH_EXTENSION_ID;
+  if (!requiredId) return true; // any chrome-extension origin is fine by default
+  return origin === `${EXTENSION_ORIGIN_PREFIX}${requiredId}`;
 }
 
-/** Get the current auth token (for display to user during setup). */
-export function getAuthToken(): string | null {
-  return authToken;
-}
-
-/** Start WebSocket server and wait for extension to connect.
- *  @param port - WebSocket port
- *  @param fixedToken - optional fixed token (skip random generation)
- */
-export function startBridge(port = DEFAULT_PORT, fixedToken?: string): Promise<void> {
-  authToken = fixedToken || generateToken();
-
+/** Start WebSocket server and wait for extension to connect. */
+export function startBridge(port = DEFAULT_PORT): Promise<void> {
   return new Promise((resolve, reject) => {
-    wss = new WebSocketServer({ port, host: '127.0.0.1' });
+    wss = new WebSocketServer({
+      port,
+      host: '127.0.0.1',
+      // Reject handshake at HTTP level before upgrading to WS if origin is bad
+      verifyClient: (info, cb) => {
+        const origin = info.req.headers.origin;
+        if (isAllowedOrigin(origin)) {
+          cb(true);
+        } else {
+          console.error(`[bridge] Rejected connection — bad origin: ${origin || '(none)'}`);
+          cb(false, 403, 'Only chrome-extension origins are allowed');
+        }
+      },
+    });
 
     wss.on('listening', () => {
       console.error(`[bridge] WebSocket server listening on ws://127.0.0.1:${port}`);
-      console.error(`[bridge] Auth token: ${authToken}`);
+      const required = process.env.CLICKSMITH_EXTENSION_ID;
+      if (required) {
+        console.error(`[bridge] Extension id lock: ${required}`);
+      } else {
+        console.error('[bridge] Accepting any chrome-extension:// origin (set CLICKSMITH_EXTENSION_ID to lock)');
+      }
       resolve();
     });
 
@@ -60,53 +74,28 @@ export function startBridge(port = DEFAULT_PORT, fixedToken?: string): Promise<v
       reject(err);
     });
 
-    wss.on('connection', (ws) => {
-      console.error('[bridge] New connection — awaiting auth...');
-      let authenticated = false;
+    wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
+      const origin = request.headers.origin || '(unknown)';
+      console.error(`[bridge] Extension connected from ${origin}`);
 
-      // Close if not authenticated within timeout
-      const authTimer = setTimeout(() => {
-        if (!authenticated) {
-          console.error('[bridge] Auth timeout — closing connection');
-          ws.close(4001, 'Auth timeout');
-        }
-      }, AUTH_TIMEOUT);
+      // Replace previous connection (e.g. extension reloaded)
+      if (activeSocket && activeSocket !== ws) {
+        console.error('[bridge] Replacing previous connection');
+        activeSocket.close();
+      }
+      activeSocket = ws;
+
+      // Keepalive at the WS protocol layer
+      if (pingTimer) clearInterval(pingTimer);
+      pingTimer = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.ping();
+      }, PING_INTERVAL);
 
       ws.on('message', (data) => {
         try {
           const msg = JSON.parse(data.toString());
 
-          // First message must be auth
-          if (!authenticated) {
-            clearTimeout(authTimer);
-            // Accept __skip__ token for development (auth disabled in extension)
-            const tokenValid = msg.type === 'auth' && (msg.token === authToken || msg.token === '__skip__');
-            if (tokenValid) {
-              authenticated = true;
-              console.error('[bridge] Extension authenticated');
-
-              // Replace previous connection
-              if (activeSocket && activeSocket !== ws) {
-                console.error('[bridge] Replacing previous connection');
-                activeSocket.close();
-              }
-              activeSocket = ws;
-
-              // Start keepalive
-              if (pingTimer) clearInterval(pingTimer);
-              pingTimer = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) ws.ping();
-              }, PING_INTERVAL);
-
-              ws.send(JSON.stringify({ type: 'auth_ok' }));
-            } else {
-              console.error('[bridge] Invalid auth — closing connection');
-              ws.close(4003, 'Invalid token');
-            }
-            return;
-          }
-
-          // Keepalive pings from extension — ack and drop, don't forward
+          // App-level keepalive pings from extension — ack and drop, don't forward
           if (msg.type === 'ping') {
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: 'pong', id: msg.id }));
@@ -114,7 +103,6 @@ export function startBridge(port = DEFAULT_PORT, fixedToken?: string): Promise<v
             return;
           }
 
-          // Authenticated: forward to callback
           messageCallback?.(msg as ExtensionResponse);
         } catch (err) {
           console.error('[bridge] Failed to parse message:', err);
@@ -122,7 +110,6 @@ export function startBridge(port = DEFAULT_PORT, fixedToken?: string): Promise<v
       });
 
       ws.on('close', () => {
-        clearTimeout(authTimer);
         if (activeSocket === ws) {
           console.error('[bridge] Extension disconnected');
           activeSocket = null;
@@ -151,7 +138,7 @@ export function sendToExtension(msg: ExtensionRequest): void {
   activeSocket.send(JSON.stringify(msg));
 }
 
-/** Check if extension is connected and authenticated. */
+/** Check if extension is connected. */
 export function isExtensionConnected(): boolean {
   return activeSocket !== null && activeSocket.readyState === WebSocket.OPEN;
 }
@@ -161,5 +148,4 @@ export function stopBridge(): void {
   if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
   if (activeSocket) { activeSocket.close(); activeSocket = null; }
   if (wss) { wss.close(); wss = null; }
-  authToken = null;
 }

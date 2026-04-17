@@ -16,10 +16,9 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { MessageType, ResponseType } from '../shared/protocol.js';
 import type { ExtensionRequest, ExtensionResponse } from '../shared/protocol.js';
-import { writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { startBridge, onExtensionMessage, sendToExtension, isExtensionConnected, getAuthToken } from './native-messaging-bridge.js';
+import { startBridge, onExtensionMessage, sendToExtension, isExtensionConnected } from './native-messaging-bridge.js';
 import { readFileSync } from 'fs';
 import { sessionRecorder, handleSaveFile } from './host-tools.js';
 
@@ -322,23 +321,7 @@ async function main() {
   const portArg = process.argv.find(a => a.startsWith('--port='));
   const port = portArg ? parseInt(portArg.split('=')[1], 10) : 9333;
 
-  // Optional fixed token: --token=mytoken (useful for stable setup)
-  const tokenArg = process.argv.find(a => a.startsWith('--token='));
-  const fixedToken = tokenArg ? tokenArg.split('=')[1] : undefined;
-
-  await startBridge(port, fixedToken);
-
-  // Write token to file so user can easily copy it
-  const token = getAuthToken();
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const tokenPath = join(__dirname, '..', '..', 'auth-token.txt');
-  try {
-    writeFileSync(tokenPath, token || '');
-    console.error(`[mcp] Auth token written to: ${tokenPath}`);
-  } catch {
-    // dist might not be writable, fall back to just logging
-    console.error(`[mcp] Auth token: ${token}`);
-  }
+  await startBridge(port);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

@@ -1,23 +1,18 @@
 #!/usr/bin/env node
 /**
- * Install script: interactive setup for Clicksmith.
- * Generates MCP config with --token flag, prints extension setup steps.
+ * Install script: setup instructions for Clicksmith.
+ * No token needed — auth is via WebSocket Origin header (chrome-extension://).
  *
- * Usage: node scripts/install.js [--token=mytoken]
+ * Usage: node scripts/install.js
  */
 
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { randomBytes } from 'crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 const serverPath = resolve(root, 'dist', 'host', 'host', 'mcp-server.js').replace(/\\/g, '/');
 const extPath = resolve(root, 'dist', 'extension').replace(/\\/g, '/');
-
-// Parse --token from args or generate one
-const tokenArg = process.argv.find(a => a.startsWith('--token='));
-const token = tokenArg ? tokenArg.split('=')[1] : randomBytes(16).toString('hex');
 
 console.log(`
 ========================================
@@ -29,28 +24,29 @@ STEP 1: Load Chrome Extension
   2. Enable "Developer mode" (top right)
   3. Click "Load unpacked"
   4. Select: ${extPath}
+  5. Copy the extension ID shown on that tile (optional, see Step 3)
 
-STEP 2: Set Auth Token in Extension
-  1. On chrome://extensions, click "Service worker" under the extension
-  2. In DevTools console, run:
-
-     chrome.storage.local.set({ authToken: '${token}' })
-
-STEP 3: Add MCP Server Config
+STEP 2: Add MCP Server Config
 
   For Claude Desktop (~/.claude/claude_desktop_config.json):
-${JSON.stringify({ mcpServers: { 'chrome-qa': { command: 'node', args: [serverPath, `--token=${token}`] } } }, null, 2).split('\n').map(l => '  ' + l).join('\n')}
+${JSON.stringify({ mcpServers: { clicksmith: { command: 'node', args: [serverPath] } } }, null, 2).split('\n').map(l => '  ' + l).join('\n')}
 
   For Claude Code (settings or claude mcp add):
-    claude mcp add chrome-qa node -- ${serverPath} --token=${token}
+    claude mcp add clicksmith node -- ${serverPath}
+
+STEP 3: (Optional) Lock to your specific extension id
+  Default accepts any chrome-extension:// origin. To restrict to only your
+  extension, set the env var in your MCP server config:
+
+    "env": { "CLICKSMITH_EXTENSION_ID": "<the id from step 1.5>" }
 
 STEP 4: Verify
   1. Restart Claude Desktop or Claude Code
-  2. Extension console should show: "[bg] Authenticated with MCP server"
+  2. Extension service worker console should log: "[bg] Connected to MCP server"
   3. Test: ask Claude to run navigate("https://example.com")
 
 ========================================
-  Auth Token: ${token}
-  (same token must be in BOTH extension storage and MCP --token flag)
+  Security: no token. Server validates the WebSocket Origin header
+  (chrome-extension://…) set by Chrome — page JS cannot forge it.
 ========================================
 `);

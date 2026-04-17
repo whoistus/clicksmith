@@ -16,7 +16,6 @@ const RECONNECT_DELAY = 3000;
 
 // --- State ---
 let ws = null;
-let authenticated = false;
 /** @type {Map<number, {tabId: number, version: string}>} debugger attachments by tabId */
 const debuggerAttachments = new Map();
 
@@ -28,29 +27,18 @@ async function connect() {
     return;
   }
 
-  // AUTH DISABLED FOR DEVELOPMENT — uncomment below to re-enable
-  // const { authToken } = await chrome.storage.local.get('authToken');
-  // if (!authToken) {
-  //   console.error('[bg] No auth token set. Go to extension options to configure.');
-  //   setTimeout(connect, RECONNECT_DELAY);
-  //   return;
-  // }
-
+  // Auth model: no token. Server validates the Origin header (chrome-extension://…)
+  // which Chrome sets during the WebSocket handshake and page JS cannot forge.
   const socket = new WebSocket(WS_URL);
   ws = socket;
 
   socket.onopen = () => {
     console.log('[bg] Connected to MCP server');
-    // Use local `socket` ref, not module-level `ws` (guards against races)
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'auth', token: '__skip__' }));
-    }
   };
 
   socket.onclose = () => {
     console.log('[bg] Disconnected from MCP server, reconnecting...');
     if (ws === socket) ws = null;
-    authenticated = false;
     setTimeout(connect, RECONNECT_DELAY);
   };
 
@@ -62,13 +50,6 @@ async function connect() {
     let msgId = 'unknown';
     try {
       const msg = JSON.parse(event.data);
-
-      // Handle auth response
-      if (msg.type === 'auth_ok') {
-        authenticated = true;
-        console.log('[bg] Authenticated with MCP server');
-        return;
-      }
 
       // Keepalive pong — ignore
       if (msg.type === 'pong') return;
@@ -655,7 +636,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== 'ws-keepalive') return;
   if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
     connect();
-  } else if (ws.readyState === WebSocket.OPEN && authenticated) {
+  } else if (ws.readyState === WebSocket.OPEN) {
     // Lightweight app-level ping so the SW has a recent event to stay alive
     try { ws.send(JSON.stringify({ type: 'ping', id: `ka_${Date.now()}` })); } catch { /* noop */ }
   }
