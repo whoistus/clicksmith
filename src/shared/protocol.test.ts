@@ -16,6 +16,7 @@ import type {
   WaitForRequest,
   GetTextRequest,
   GetNetworkLogRequest,
+  SelectOptionRequest,
   SuccessResponse,
   ErrorResponse,
   ExtensionRequest,
@@ -175,5 +176,32 @@ describe('Protocol types', () => {
   it('should construct GetNetworkLogRequest with optional filter', () => {
     const req: GetNetworkLogRequest = { type: MessageType.GET_NETWORK_LOG, id: 'r8', filter: '/api/' };
     expect(req.filter).toBe('/api/');
+  });
+
+  // Phase 4: SelectOptionRequest with strategy
+  it('should construct SelectOptionRequest with strategy', () => {
+    const req: SelectOptionRequest = {
+      type: MessageType.SELECT_OPTION, id: 'r9', role: 'combobox', name: 'Country',
+      value: 'Vietnam', strategy: 'fuzzy',
+    };
+    expect(req.strategy).toBe('fuzzy');
+    expect(req.value).toBe('Vietnam');
+  });
+
+  it('should construct SelectOptionRequest without value when using first strategy', () => {
+    const req: SelectOptionRequest = {
+      type: MessageType.SELECT_OPTION, id: 'r10', role: 'combobox', name: 'Country',
+      strategy: 'first',
+    };
+    expect(req.strategy).toBe('first');
+    expect(req.value).toBeUndefined();
+  });
+
+  it('should construct SelectOptionRequest with values array', () => {
+    const req: SelectOptionRequest = {
+      type: MessageType.SELECT_OPTION, id: 'r11', role: 'listbox', name: 'Tags',
+      values: ['red', 'blue'], strategy: 'exact',
+    };
+    expect(req.values).toEqual(['red', 'blue']);
   });
 });

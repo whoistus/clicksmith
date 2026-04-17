@@ -1,4 +1,4 @@
-# Chrome Like a Human
+# Clicksmith
 
 Chrome extension MCP server that lets Claude test web apps in your **real Chrome browser** — with your real auth, cookies, and extensions. ARIA-first element resolution, QA assertions, network capture, and test generation.
 

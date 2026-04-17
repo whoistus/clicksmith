@@ -1,5 +1,5 @@
 /**
- * MCP tool definitions for Chrome Like a Human.
+ * MCP tool definitions for Clicksmith.
  * Phase 1: 6 core tools (navigate, snapshot, screenshot, click, type, press_key)
  * Phase 2: 11 QA tools (assertions, wait, observation)
  */
@@ -111,8 +111,8 @@ const OBSERVATION_TOOLS = [
 const INTERACTION_TOOLS = [
   {
     name: 'select_option',
-    description: 'Select option(s) from a dropdown (native <select> or custom). For multi-select, use "values" array.',
-    inputSchema: { type: obj, properties: { role: { type: 'string', description: 'ARIA role (combobox, listbox)' }, name: { type: 'string', description: 'Accessible name of dropdown' }, value: { type: 'string', description: 'Option value or text (single select)' }, values: { type: 'array', description: 'Array of values (multi-select)', items: { type: 'string' } } }, required: ['role', 'name'] },
+    description: 'Select option(s) from a dropdown (native <select> or custom). Strategies: "exact" (default, error if not found), "first" (select first option), "random" (select random option), "fuzzy" (partial match, fallback to first). On failure, returns available_options list for quick retry.',
+    inputSchema: { type: obj, properties: { role: { type: 'string', description: 'ARIA role (combobox, listbox)' }, name: { type: 'string', description: 'Accessible name of dropdown' }, value: { type: 'string', description: 'Option value or text (single select)' }, values: { type: 'array', description: 'Array of values (multi-select)', items: { type: 'string' } }, strategy: { type: 'string', enum: ['exact', 'first', 'random', 'fuzzy'], description: 'Selection strategy: exact (default), first, random, fuzzy (partial match)' } }, required: ['role', 'name'] },
   },
   {
     name: 'hover',
@@ -128,6 +128,50 @@ const INTERACTION_TOOLS = [
     name: 'switch_tab',
     description: 'Switch to a specific Chrome tab by its ID.',
     inputSchema: { type: obj, properties: { id: { type: 'number', description: 'Tab ID (from list_tabs)' } }, required: ['id'] },
+  },
+];
+
+// Batch execution tool (host-only). Runs multiple tool calls in a single
+// round-trip, eliminating inter-call model inference overhead — the dominant
+// wall-clock cost in autonomous test runs.
+const BATCH_TOOLS = [
+  {
+    name: 'batch',
+    description: 'Execute multiple tool calls sequentially in a single round-trip. Massively reduces wall-clock time for multi-step test flows by eliminating inter-call model inference overhead. Continues on errors by default (so a full test suite completes even if a step fails). Auto-appends a snapshot of the final page so Claude sees post-state without another call. Cannot nest batch inside batch.',
+    inputSchema: {
+      type: obj,
+      properties: {
+        actions: {
+          type: 'array',
+          description: 'Ordered tool calls. Each item: { tool: <name>, ...args }. Example: [{"tool":"type","role":"textbox","name":"Email","text":"x@y"},{"tool":"click","role":"button","name":"Sign in"}]',
+          items: {
+            type: obj,
+            properties: { tool: { type: 'string', description: 'Tool name (cannot be "batch").' } },
+            required: ['tool'],
+          },
+        },
+        stop_on_error: { type: 'boolean', description: 'Stop on first error. Default false — continue to complete full test suite.' },
+        snapshot_after: { type: 'boolean', description: 'Auto-capture interactive snapshot of final page state. Default true.' },
+      },
+      required: ['actions'],
+    },
+  },
+];
+
+// Phase 5: Design QA tool — extract computed styles for visual comparison against design tools.
+// Pairs with Figma MCP (or any design source) to diff live implementation vs spec.
+const DESIGN_TOOLS = [
+  {
+    name: 'get_element_style',
+    description: 'Get computed CSS styles and bounding box of an element. Use to compare live UI against design spec (e.g. from Figma MCP) — colors, typography, spacing, dimensions. Returns { color, backgroundColor, fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, padding, margin, borderRadius, borderWidth, borderColor, boxShadow, opacity, display, bounds: {x,y,width,height} }.',
+    inputSchema: {
+      type: obj,
+      properties: {
+        role: { type: 'string', description: 'ARIA role' },
+        name: { type: 'string', description: 'Accessible name' },
+      },
+      required: ['role', 'name'],
+    },
   },
 ];
 
@@ -176,5 +220,7 @@ export const ALL_TOOLS = [
   ...WAIT_TOOLS,
   ...OBSERVATION_TOOLS,
   ...INTERACTION_TOOLS,
+  ...DESIGN_TOOLS,
   ...SESSION_TOOLS,
+  ...BATCH_TOOLS,
 ];

@@ -152,6 +152,18 @@ class NetworkCapture {
     return null;
   }
 
+  /**
+   * Get requestIds for recent JSON responses (for API payload correlation).
+   * @param {number} sinceMs - epoch ms; only entries with timestamp >= sinceMs
+   * @returns {string[]}
+   */
+  getRecentJsonRequestIds(sinceMs) {
+    return this._entries
+      .filter(e => e.complete && !e.failed && e.timestamp >= sinceMs
+        && typeof e.mimeType === 'string' && e.mimeType.includes('json'))
+      .map(e => e.requestId);
+  }
+
   /** Clear all entries. */
   clear() {
     this._entries = [];

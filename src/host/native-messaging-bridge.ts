@@ -106,6 +106,14 @@ export function startBridge(port = DEFAULT_PORT, fixedToken?: string): Promise<v
             return;
           }
 
+          // Keepalive pings from extension — ack and drop, don't forward
+          if (msg.type === 'ping') {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'pong', id: msg.id }));
+            }
+            return;
+          }
+
           // Authenticated: forward to callback
           messageCallback?.(msg as ExtensionResponse);
         } catch (err) {

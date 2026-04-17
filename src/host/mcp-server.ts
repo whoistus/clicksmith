@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * MCP server for Chrome Like a Human.
+ * MCP server for Clicksmith.
  * Registers 17 tools (6 core + 11 QA), routes calls through WebSocket bridge to Chrome extension.
  * Transport: stdio (JSON-RPC via @modelcontextprotocol/sdk).
  * IMPORTANT: All logging to stderr only — stdout is reserved for MCP protocol.
@@ -46,7 +46,9 @@ function callExtension(msg: Omit<ExtensionRequest, 'id'>): Promise<unknown> {
   const request = { ...msg, id } as ExtensionRequest;
 
   if (!isExtensionConnected()) {
-    return Promise.reject(new Error('Chrome extension not connected. Open Chrome with the extension loaded.'));
+    return Promise.reject(new Error(
+      'Chrome extension not connected. Check: (1) Chrome is running, (2) "Clicksmith" extension is enabled at chrome://extensions, (3) if just installed, click the extension icon once to wake it.'
+    ));
   }
 
   return new Promise((resolve, reject) => {
@@ -105,11 +107,13 @@ const TOOL_TYPE_MAP: Record<string, MessageType> = {
   hover: MessageType.HOVER,
   list_tabs: MessageType.LIST_TABS,
   switch_tab: MessageType.SWITCH_TAB,
+  // Phase 5: Design QA
+  get_element_style: MessageType.GET_ELEMENT_STYLE,
 };
 
 // Create and configure MCP server
 const server = new Server(
-  { name: 'chrome-like-a-human', version: '0.1.0' },
+  { name: 'clicksmith', version: '0.1.0' },
   { capabilities: { tools: {}, prompts: {} } }
 );
 
@@ -149,13 +153,96 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 }));
 
 // Host-only tools (no extension message needed)
-const HOST_TOOLS = new Set(['get_session', 'clear_session', 'save_file', 'start_test', 'end_test']);
+const HOST_TOOLS = new Set(['get_session', 'clear_session', 'save_file', 'start_test', 'end_test', 'batch']);
+
+/**
+ * Dispatch a single tool call (no MCP response wrapping). Used by both
+ * CallToolRequestSchema handler and `batch`. Non-throwing — returns shape
+ * { ok: true, data } or { ok: false, error }.
+ */
+async function dispatchTool(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  try {
+    if (name === 'batch') {
+      return { ok: false, error: 'batch cannot be nested inside batch' };
+    }
+    if (HOST_TOOLS.has(name)) {
+      // Host tools return MCP-shaped content, extract the data
+      const mcp = handleHostTool(name, args);
+      const text = mcp.content?.[0]?.type === 'text' ? mcp.content[0].text : JSON.stringify(mcp);
+      return mcp.isError ? { ok: false, error: text } : { ok: true, data: text };
+    }
+    const messageType = TOOL_TYPE_MAP[name];
+    if (!messageType) return { ok: false, error: `Unknown tool: ${name}` };
+
+    sessionRecorder.recordCall(name, args);
+    const result = await callExtension({ type: messageType, ...args });
+    sessionRecorder.recordResult(result);
+    return { ok: true, data: result };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    sessionRecorder.recordError(msg);
+    return { ok: false, error: msg };
+  }
+}
+
+interface BatchAction { tool: string; [key: string]: unknown }
+
+/** Execute a batch of tool calls in a single round-trip. */
+async function handleBatch(args: Record<string, unknown>) {
+  const actions = (args.actions as BatchAction[]) || [];
+  const stopOnError = args.stop_on_error === true; // default false
+  const snapshotAfter = args.snapshot_after !== false; // default true
+
+  if (!Array.isArray(actions) || actions.length === 0) {
+    return { content: [{ type: 'text', text: 'Error: batch.actions must be a non-empty array' }], isError: true };
+  }
+
+  const results: Array<{ index: number; tool: string; ok: boolean; ms: number; data?: unknown; error?: string }> = [];
+  const batchStart = Date.now();
+  let stopped = false;
+
+  for (let i = 0; i < actions.length; i++) {
+    const action = actions[i];
+    const { tool, ...actionArgs } = action;
+    const t0 = Date.now();
+    const res = await dispatchTool(tool, actionArgs as Record<string, unknown>);
+    const ms = Date.now() - t0;
+    results.push({ index: i, tool, ok: res.ok, ms, ...(res.ok ? { data: res.data } : { error: res.error }) });
+    if (!res.ok && stopOnError) { stopped = true; break; }
+  }
+
+  // Auto-snapshot final state (interactive mode for token efficiency)
+  let finalSnapshot: string | null = null;
+  if (snapshotAfter) {
+    const snap = await dispatchTool('snapshot', { mode: 'interactive' });
+    finalSnapshot = snap.ok ? (typeof snap.data === 'string' ? snap.data : JSON.stringify(snap.data)) : `(snapshot failed: ${snap.error})`;
+  }
+
+  const totalMs = Date.now() - batchStart;
+  const okCount = results.filter(r => r.ok).length;
+  const summary = {
+    executed: results.length,
+    total: actions.length,
+    succeeded: okCount,
+    failed: results.length - okCount,
+    stopped_early: stopped,
+    total_ms: totalMs,
+    results,
+    ...(finalSnapshot !== null ? { final_snapshot: finalSnapshot } : {}),
+  };
+
+  return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] };
+}
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
     // Host-only tools
+    if (name === 'batch') {
+      return handleBatch((args || {}) as Record<string, unknown>);
+    }
+
     if (HOST_TOOLS.has(name)) {
       return handleHostTool(name, args || {});
     }
@@ -194,7 +281,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-function handleHostTool(name: string, args: Record<string, unknown>) {
+function handleHostTool(name: string, args: Record<string, unknown>): { content: Array<{ type: string; text: string }>; isError?: boolean } {
   switch (name) {
     case 'get_session': {
       const transcript = sessionRecorder.getTranscript();
@@ -255,7 +342,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('[mcp] Chrome Like a Human MCP server started');
+  console.error('[mcp] Clicksmith MCP server started');
 }
 
 main().catch((err) => {

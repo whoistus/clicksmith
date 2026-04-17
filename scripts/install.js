@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Install script: interactive setup for Chrome Like a Human.
+ * Install script: interactive setup for Clicksmith.
  * Generates MCP config with --token flag, prints extension setup steps.
  *
  * Usage: node scripts/install.js [--token=mytoken]
@@ -21,7 +21,7 @@ const token = tokenArg ? tokenArg.split('=')[1] : randomBytes(16).toString('hex'
 
 console.log(`
 ========================================
-  Chrome Like a Human — Setup
+  Clicksmith — Setup
 ========================================
 
 STEP 1: Load Chrome Extension

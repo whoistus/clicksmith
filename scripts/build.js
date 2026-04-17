@@ -15,7 +15,7 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
 
-console.log('Building Chrome Like a Human...\n');
+console.log('Building Clicksmith...\n');
 
 // Step 1: Compile TypeScript (host + shared)
 console.log('1. Compiling TypeScript...');

@@ -31,6 +31,8 @@ export enum MessageType {
   HOVER = 'hover',
   LIST_TABS = 'list_tabs',
   SWITCH_TAB = 'switch_tab',
+  // Phase 5: Design QA
+  GET_ELEMENT_STYLE = 'get_element_style',
 }
 
 // Response types from extension -> host
@@ -162,7 +164,9 @@ export interface SelectOptionRequest {
   id: string;
   role: string;
   name: string;
-  value: string;
+  value?: string;
+  values?: string[];
+  strategy?: 'exact' | 'first' | 'random' | 'fuzzy';
 }
 
 export interface HoverRequest {
@@ -181,6 +185,14 @@ export interface SwitchTabRequest {
   type: MessageType.SWITCH_TAB;
   id: string;
   id_tab: number;
+}
+
+// Phase 5: Design QA — inspect computed styles for visual comparison with design tools (Figma, etc)
+export interface GetElementStyleRequest {
+  type: MessageType.GET_ELEMENT_STYLE;
+  id: string;
+  role: string;
+  name: string;
 }
 
 export type ExtensionRequest =
@@ -204,7 +216,8 @@ export type ExtensionRequest =
   | SelectOptionRequest
   | HoverRequest
   | ListTabsRequest
-  | SwitchTabRequest;
+  | SwitchTabRequest
+  | GetElementStyleRequest;
 
 // Response from extension back to host
 export interface SuccessResponse {

@@ -2,8 +2,20 @@ import { describe, it, expect } from 'vitest';
 import { ALL_TOOLS } from './tool-definitions.js';
 
 describe('Tool definitions', () => {
-  it('should have 26 tools total (6 core + 5 assert + 2 wait + 4 observe + 4 interact + 5 session)', () => {
-    expect(ALL_TOOLS).toHaveLength(26);
+  it('should have 28 tools total (6 core + 5 assert + 2 wait + 4 observe + 4 interact + 1 design + 5 session + 1 batch)', () => {
+    expect(ALL_TOOLS).toHaveLength(28);
+  });
+
+  it('should include get_element_style for design QA', () => {
+    const tool = ALL_TOOLS.find(t => t.name === 'get_element_style');
+    expect(tool).toBeDefined();
+    expect(tool?.inputSchema.required).toEqual(['role', 'name']);
+  });
+
+  it('should include batch tool with actions required', () => {
+    const batch = ALL_TOOLS.find(t => t.name === 'batch');
+    expect(batch).toBeDefined();
+    expect(batch?.inputSchema.required).toContain('actions');
   });
 
   it('should have unique tool names', () => {
@@ -62,5 +74,20 @@ describe('Tool definitions', () => {
 
     const assertUrl = ALL_TOOLS.find(t => t.name === 'assert_url');
     expect(assertUrl?.inputSchema.required).toContain('pattern');
+  });
+
+  it('should have strategy enum on select_option tool', () => {
+    const selectOption = ALL_TOOLS.find(t => t.name === 'select_option');
+    expect(selectOption).toBeDefined();
+    const strategyProp = (selectOption?.inputSchema.properties as Record<string, any>).strategy;
+    expect(strategyProp).toBeDefined();
+    expect(strategyProp.type).toBe('string');
+    expect(strategyProp.enum).toEqual(['exact', 'first', 'random', 'fuzzy']);
+  });
+
+  it('should not require value on select_option (strategy can pick)', () => {
+    const selectOption = ALL_TOOLS.find(t => t.name === 'select_option');
+    expect(selectOption?.inputSchema.required).toEqual(['role', 'name']);
+    expect(selectOption?.inputSchema.required).not.toContain('value');
   });
 });

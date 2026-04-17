@@ -151,11 +151,47 @@ function findByRoleAndName(role, name) {
   return exactMatch || partialMatch || null;
 }
 
+/**
+ * Summarize every element matching a role — used when an exact name match fails,
+ * so Claude can see what the extension actually saw and retry without a snapshot.
+ * Portal-heavy libs (base-ui, Radix) often have triggers whose accessible name
+ * is the current value or placeholder, not the visible label.
+ * @param {string} role
+ * @param {number} [limit=10]
+ * @returns {Array<{name: string, visible: boolean, tag: string}>}
+ */
+function findCandidatesByRole(role, limit = 10) {
+  const allElements = deepQueryAll(document);
+  const out = [];
+  for (const el of allElements) {
+    if (getRole(el) !== role) continue;
+    out.push({
+      name: getAccessibleName(el).substring(0, 80),
+      visible: isElementVisible(el),
+      tag: el.tagName.toLowerCase(),
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** Build a "not found" error string with candidate hints appended. */
+function notFoundError(role, name) {
+  const candidates = findCandidatesByRole(role);
+  if (candidates.length === 0) {
+    return `No element found with role="${role}" name="${name}". No elements with role="${role}" exist on the page.`;
+  }
+  const hint = candidates
+    .map((c, i) => `[${i}] name="${c.name}" visible=${c.visible}`)
+    .join('; ');
+  return `No element found with role="${role}" name="${name}". ${candidates.length} candidate(s) with role="${role}": ${hint}`;
+}
+
 // --- Action Handlers ---
 
 function handleClick(msg) {
   const el = findByRoleAndName(msg.role, msg.name);
-  if (!el) return { error: `No element found with role="${msg.role}" name="${msg.name}"` };
+  if (!el) return { error: notFoundError(msg.role, msg.name) };
 
   // Native <option> inside <select>: delegate to select_option for proper event handling
   if (el.tagName === 'OPTION' && el.closest('select')) {
@@ -177,7 +213,7 @@ function handleClick(msg) {
 
 function handleType(msg) {
   const el = findByRoleAndName(msg.role, msg.name);
-  if (!el) return { error: `No element found with role="${msg.role}" name="${msg.name}"` };
+  if (!el) return { error: notFoundError(msg.role, msg.name) };
 
   el.scrollIntoView({ block: 'center', behavior: 'instant' });
   el.focus();
@@ -309,7 +345,7 @@ function handleAssertCount(msg) {
 
 function handleGetText(msg) {
   const el = findByRoleAndName(msg.role, msg.name);
-  if (!el) return { error: `No element found with role="${msg.role}" name="${msg.name}"` };
+  if (!el) return { error: notFoundError(msg.role, msg.name) };
   return { data: { text: el.textContent.trim() } };
 }
 
@@ -337,72 +373,252 @@ function handleWaitFor(msg, sendResponse) {
 
 // --- Select Option Handler ---
 
+/** Collect all options from a native <select> as [{value, text}]. Includes all options (no placeholder filtering). */
+function collectNativeOptions(selectEl) {
+  return Array.from(selectEl.options).map(o => ({ value: o.value, text: o.textContent.trim() }));
+}
+
+/**
+ * Apply selection strategy to a list of options.
+ * @param {Array<{value: string, text: string, element?: Element}>} options
+ * @param {string|undefined} target - requested value/text
+ * @param {'exact'|'first'|'random'|'fuzzy'} strategy
+ * @returns {{match: object, method: string}|null}
+ */
+function applyStrategy(options, target, strategy) {
+  if (target) {
+    // All strategies attempt exact match first
+    const targetLower = target.toLowerCase();
+    const exact = options.find(o => o.value === target || o.text.toLowerCase() === targetLower);
+    if (exact) return { match: exact, method: 'exact' };
+
+    // Fuzzy: try partial match before fallback
+    if (strategy === 'fuzzy') {
+      const partial = options.find(o =>
+        o.text.toLowerCase().includes(targetLower) || o.value.toLowerCase().includes(targetLower)
+      );
+      if (partial) return { match: partial, method: 'fuzzy' };
+    }
+  }
+
+  // Fallback based on strategy
+  if (strategy === 'first' || strategy === 'fuzzy') {
+    return options.length ? { match: options[0], method: 'first_fallback' } : null;
+  }
+  if (strategy === 'random') {
+    if (!options.length) return null;
+    return { match: options[Math.floor(Math.random() * options.length)], method: 'random_fallback' };
+  }
+
+  // exact strategy: no fallback
+  return null;
+}
+
 function handleSelectOption(msg) {
   const el = findByRoleAndName(msg.role, msg.name);
-  if (!el) return { error: `No element found with role="${msg.role}" name="${msg.name}"` };
+  if (!el) return { error: notFoundError(msg.role, msg.name) };
 
   el.scrollIntoView({ block: 'center', behavior: 'instant' });
 
-  // Support both single value (string) and multiple values (array)
-  const values = Array.isArray(msg.values) ? msg.values : [msg.value];
+  const values = Array.isArray(msg.values) ? msg.values : (msg.value != null ? [msg.value] : []);
+  const strategy = msg.strategy || 'exact';
 
   // Native <select> element
   if (el.tagName === 'SELECT') {
     const options = Array.from(el.options);
-    const selected = [];
+    const available = collectNativeOptions(el);
 
-    // For multi-select: toggle requested options
+    // Multi-select: keep existing behavior (strategy doesn't apply)
     if (el.multiple) {
+      const selected = [];
       for (const opt of options) {
         const matchText = opt.textContent.trim().toLowerCase();
         const matchVal = opt.value.toLowerCase();
         const shouldSelect = values.some(v => v.toLowerCase() === matchText || v.toLowerCase() === matchVal);
         if (shouldSelect) { opt.selected = true; selected.push(opt.value); }
       }
-    } else {
-      // Single select: find matching option
-      const target = values[0];
-      const option = options.find(o => o.value === target || o.textContent.trim().toLowerCase() === target.toLowerCase());
-      if (!option) return { error: `Option "${target}" not found in select` };
-      el.value = option.value;
-      selected.push(option.value);
+      if (selected.length === 0) {
+        // Use data path so available_options reaches Claude (eng review decision 1A)
+        return { data: { success: false, error: 'No matching options found in multi-select', available_options: available.map(o => o.text) } };
+      }
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return { data: { success: true, selectedValue: selected.length === 1 ? selected[0] : selected } };
     }
 
+    // Single select with strategy
+    const target = values[0];
+    const result = applyStrategy(available, target, strategy);
+
+    if (!result) {
+      // Data path (not error path) so available_options reaches Claude
+      return {
+        data: {
+          success: false,
+          error: target ? `Option "${target}" not found in select` : 'No value specified and strategy is "exact"',
+          available_options: available.map(o => o.text),
+        },
+      };
+    }
+
+    el.value = result.match.value;
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.dispatchEvent(new Event('input', { bubbles: true }));
-    return { data: { success: true, selectedValue: selected.length === 1 ? selected[0] : selected } };
+    return {
+      data: {
+        success: true,
+        selectedValue: result.match.value,
+        selectedText: result.match.text,
+        method: result.method,
+      },
+    };
   }
 
-  // Custom dropdown: click to open, search portals + deep DOM for option
-  el.click();
+  // Custom dropdown: MutationObserver-driven detection (replaces setTimeout polling)
+  const OPTION_ROLES = ['option', 'listitem', 'menuitem', 'treeitem'];
+  const MAX_WAIT = 2000;
+  const SETTLE_MS = 80; // debounce: wait this long after last mutation before selecting
+
   return new Promise((resolve) => {
-    setTimeout(() => {
-      // Search entire document (portals render at body level, not under trigger)
-      const allEls = deepQueryAll(document);
-      const target = values[0]?.toLowerCase();
-      const match = allEls.find(candidate => {
-        const r = getRole(candidate);
-        if (!['option', 'listitem', 'menuitem', 'treeitem'].includes(r)) return false;
-        const text = candidate.textContent.trim().toLowerCase();
-        const val = candidate.getAttribute('data-value')?.toLowerCase();
-        return text === target || val === target;
+    let settled = false;
+    let settleTimer = null;
+    let fallbackTimer = null;
+    let observer = null;
+
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      if (observer) observer.disconnect();
+      if (settleTimer) clearTimeout(settleTimer);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      resolve(payload);
+    };
+
+    const collectOptions = () => {
+      const candidates = deepQueryAll(document).filter(c => {
+        const r = getRole(c);
+        return OPTION_ROLES.includes(r) && isElementVisible(c);
       });
-      if (match) {
-        match.scrollIntoView({ block: 'center', behavior: 'instant' });
-        match.click();
-        resolve({ data: { success: true, selectedValue: values[0] } });
-      } else {
-        resolve({ error: `Option "${values[0]}" not found in dropdown. Searched ${allEls.length} elements.` });
+      return candidates.map(c => ({
+        value: c.getAttribute('data-value') || c.textContent.trim(),
+        text: c.textContent.trim(),
+        element: c,
+      }));
+    };
+
+    const trySelect = () => {
+      const options = collectOptions();
+      if (options.length === 0) {
+        finish({ data: { success: false, error: 'No dropdown options found after 2s', available_options: [] } });
+        return;
       }
-    }, 300);
+
+      const target = values[0];
+      const result = applyStrategy(options, target, strategy);
+
+      if (!result) {
+        finish({
+          data: {
+            success: false,
+            error: target ? `Option "${target}" not found in dropdown` : 'No value specified and strategy is "exact"',
+            available_options: options.map(o => o.text),
+          },
+        });
+        return;
+      }
+
+      result.match.element.scrollIntoView({ block: 'center', behavior: 'instant' });
+      result.match.element.click();
+      finish({
+        data: {
+          success: true,
+          selectedValue: result.match.value,
+          selectedText: result.match.text,
+          method: result.method,
+          available_options: options.map(o => o.text),
+        },
+      });
+    };
+
+    const scheduleSettle = () => {
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = setTimeout(trySelect, SETTLE_MS);
+    };
+
+    observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.addedNodes && m.addedNodes.length > 0) { scheduleSettle(); return; }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    fallbackTimer = setTimeout(() => {
+      if (collectOptions().length > 0) trySelect();
+      else finish({ data: { success: false, error: 'No dropdown options found after 2s', available_options: [] } });
+    }, MAX_WAIT);
+
+    el.click();
+
+    // Dropdown may already be rendered (CSS toggle, pre-existing DOM)
+    if (collectOptions().length > 0) scheduleSettle();
   });
+}
+
+// --- Design QA: Element Style Inspector ---
+// Extracts computed CSS + bounding box so Claude can diff live UI against design
+// specs pulled from Figma MCP (or any design source). Keeps the payload compact —
+// only the ~15 fields that matter for visual comparison.
+function handleGetElementStyle(msg) {
+  const el = findByRoleAndName(msg.role, msg.name);
+  if (!el) return { error: notFoundError(msg.role, msg.name) };
+
+  const cs = window.getComputedStyle(el);
+  const r = el.getBoundingClientRect();
+
+  // Round bounds to integers — sub-pixel precision is noise for design diffs
+  const bounds = {
+    x: Math.round(r.x),
+    y: Math.round(r.y),
+    width: Math.round(r.width),
+    height: Math.round(r.height),
+  };
+
+  return {
+    data: {
+      // Color / fill
+      color: cs.color,
+      backgroundColor: cs.backgroundColor,
+      // Typography
+      fontFamily: cs.fontFamily,
+      fontSize: cs.fontSize,
+      fontWeight: cs.fontWeight,
+      lineHeight: cs.lineHeight,
+      letterSpacing: cs.letterSpacing,
+      textAlign: cs.textAlign,
+      // Box model
+      padding: cs.padding,
+      margin: cs.margin,
+      // Border / shape
+      borderRadius: cs.borderRadius,
+      borderWidth: cs.borderWidth,
+      borderColor: cs.borderColor,
+      borderStyle: cs.borderStyle,
+      // Effects
+      boxShadow: cs.boxShadow,
+      opacity: cs.opacity,
+      // Layout
+      display: cs.display,
+      position: cs.position,
+      bounds,
+    },
+  };
 }
 
 // --- Hover Handler ---
 
 function handleHover(msg) {
   const el = findByRoleAndName(msg.role, msg.name);
-  if (!el) return { error: `No element found with role="${msg.role}" name="${msg.name}"` };
+  if (!el) return { error: notFoundError(msg.role, msg.name) };
   el.scrollIntoView({ block: 'center', behavior: 'instant' });
   el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
   el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
@@ -449,6 +665,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case 'assert_text': result = handleAssertText(msg); break;
       case 'assert_count': result = handleAssertCount(msg); break;
       case 'get_text': result = handleGetText(msg); break;
+      case 'get_element_style': result = handleGetElementStyle(msg); break;
       default:
         result = { error: `Unknown content action: ${msg.type}` };
     }

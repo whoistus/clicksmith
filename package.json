@@ -1,5 +1,5 @@
 {
-  "name": "chrome-like-a-human",
+  "name": "clicksmith",
   "version": "0.1.0",
   "description": "Chrome extension MCP server for human-like QA testing",
   "type": "module",

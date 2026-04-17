@@ -1,5 +1,5 @@
 /**
- * Background service worker for Chrome Like a Human extension.
+ * Background service worker for Clicksmith extension.
  * Connects to MCP server via WebSocket, dispatches commands to CDP or content script.
  *
  * Architecture:
@@ -23,6 +23,11 @@ const debuggerAttachments = new Map();
 // --- WebSocket Connection ---
 
 async function connect() {
+  // Guard against concurrent connect() calls (onStartup + onInstalled + alarm + initial)
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+    return;
+  }
+
   // AUTH DISABLED FOR DEVELOPMENT — uncomment below to re-enable
   // const { authToken } = await chrome.storage.local.get('authToken');
   // if (!authToken) {
@@ -31,25 +36,29 @@ async function connect() {
   //   return;
   // }
 
-  ws = new WebSocket(WS_URL);
+  const socket = new WebSocket(WS_URL);
+  ws = socket;
 
-  ws.onopen = () => {
+  socket.onopen = () => {
     console.log('[bg] Connected to MCP server');
-    // AUTH DISABLED — send skip-auth signal
-    ws.send(JSON.stringify({ type: 'auth', token: '__skip__' }));
+    // Use local `socket` ref, not module-level `ws` (guards against races)
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'auth', token: '__skip__' }));
+    }
   };
 
-  ws.onclose = () => {
+  socket.onclose = () => {
     console.log('[bg] Disconnected from MCP server, reconnecting...');
-    ws = null;
+    if (ws === socket) ws = null;
+    authenticated = false;
     setTimeout(connect, RECONNECT_DELAY);
   };
 
-  ws.onerror = (err) => {
+  socket.onerror = (err) => {
     console.error('[bg] WebSocket error:', err.message || err);
   };
 
-  ws.onmessage = async (event) => {
+  socket.onmessage = async (event) => {
     let msgId = 'unknown';
     try {
       const msg = JSON.parse(event.data);
@@ -60,6 +69,9 @@ async function connect() {
         console.log('[bg] Authenticated with MCP server');
         return;
       }
+
+      // Keepalive pong — ignore
+      if (msg.type === 'pong') return;
 
       msgId = msg.id || 'unknown';
       if (!msg.id || !msg.type) {
@@ -105,10 +117,12 @@ async function handleMessage(msg) {
     case 'get_network_log': return handleGetNetworkLog(msg);
     case 'get_console_log': return handleGetConsoleLog(msg);
     // Phase 4: New interaction tools
-    case 'select_option': return handleContentAction(msg);
+    case 'select_option': return handleSelectOptionWithCorrelation(msg);
     case 'hover': return handleContentAction(msg);
     case 'list_tabs': return handleListTabs();
     case 'switch_tab': return handleSwitchTab(msg);
+    // Phase 5: Design QA
+    case 'get_element_style': return handleContentAction(msg);
     default:
       throw new Error(`Unknown message type: ${msg.type}`);
   }
@@ -274,6 +288,123 @@ async function handleContentAction(msg) {
       }
     });
   });
+}
+
+// --- Select Option with API Payload Correlation ---
+
+/**
+ * Walk a JSON value and collect every array encountered.
+ * @param {any} val
+ * @param {Array<any[]>} acc
+ */
+function collectArrays(val, acc) {
+  if (Array.isArray(val)) {
+    acc.push(val);
+    for (const item of val) collectArrays(item, acc);
+  } else if (val && typeof val === 'object') {
+    for (const k of Object.keys(val)) collectArrays(val[k], acc);
+  }
+}
+
+/**
+ * Extract candidate string labels from an array of items.
+ * Items can be primitives or objects with name/label/text/title fields.
+ */
+function extractLabels(arr) {
+  const out = [];
+  for (const item of arr) {
+    if (item == null) continue;
+    if (typeof item === 'string') out.push(item);
+    else if (typeof item === 'number') out.push(String(item));
+    else if (typeof item === 'object') {
+      for (const key of ['name', 'label', 'text', 'title', 'displayName', 'value']) {
+        if (typeof item[key] === 'string') { out.push(item[key]); break; }
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Score overlap between API array labels and visible option text.
+ * Returns ratio 0..1 of visible options present in the array.
+ */
+function scoreOverlap(arr, optionSet) {
+  if (!arr.length || !optionSet.size) return 0;
+  const labels = extractLabels(arr).map(s => s.toLowerCase().trim());
+  if (!labels.length) return 0;
+  const labelSet = new Set(labels);
+  let hits = 0;
+  for (const opt of optionSet) if (labelSet.has(opt)) hits++;
+  return hits / optionSet.size;
+}
+
+/**
+ * Scan recent JSON responses, return the best-matching array payload for the dropdown.
+ * Returns null if no match above 50% overlap or all bodies evicted.
+ */
+async function correlateApiPayload(tabId, availableOptions, sinceMs) {
+  const ids = networkCapture.getRecentJsonRequestIds(sinceMs);
+  if (!ids.length) return null;
+
+  const optionSet = new Set(availableOptions.map(o => String(o).toLowerCase().trim()).filter(Boolean));
+  if (!optionSet.size) return null;
+
+  let bestArr = null;
+  let bestScore = 0;
+
+  // Newest first; cap to last 20 to avoid pounding CDP
+  for (const id of ids.slice(-20).reverse()) {
+    let body;
+    try {
+      const res = await cdpCommand(tabId, 'Network.getResponseBody', { requestId: id });
+      if (res.base64Encoded) continue;
+      body = res.body;
+    } catch { continue; } // body evicted or request failed
+
+    let parsed;
+    try { parsed = JSON.parse(body); } catch { continue; }
+
+    const arrays = [];
+    collectArrays(parsed, arrays);
+    for (const arr of arrays) {
+      if (arr.length < 2) continue; // skip trivial arrays
+      const score = scoreOverlap(arr, optionSet);
+      if (score > bestScore) { bestScore = score; bestArr = arr; }
+      if (bestScore >= 0.99) break;
+    }
+    if (bestScore >= 0.99) break;
+  }
+
+  if (bestScore < 0.5) return null;
+  // Cap payload size to avoid token bloat
+  return { overlap: Number(bestScore.toFixed(2)), items: bestArr.slice(0, 200) };
+}
+
+async function handleSelectOptionWithCorrelation(msg) {
+  const tabId = await getActiveTabId();
+  // Ensure network capture is running so we have recent request log
+  try { await ensureCaptureStarted(tabId); } catch { /* non-fatal */ }
+  const startedAt = Date.now();
+
+  const result = await new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, msg, (response) => {
+      if (chrome.runtime.lastError) reject(new Error(`Content script error: ${chrome.runtime.lastError.message}`));
+      else if (response?.error) reject(new Error(response.error));
+      else resolve(response?.data ?? 'OK');
+    });
+  });
+
+  if (result && typeof result === 'object' && Array.isArray(result.available_options) && result.available_options.length > 0) {
+    try {
+      const payload = await correlateApiPayload(tabId, result.available_options, startedAt - 5000);
+      if (payload) result.api_payload = payload;
+    } catch (err) {
+      console.error('[bg] API payload correlation failed:', err.message);
+    }
+  }
+
+  return result;
 }
 
 // --- Accessibility Tree Formatter ---
@@ -511,6 +642,28 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     console.log(`[bg] SPA navigation: ${msg.url} (tab ${sender.tab.id})`);
   }
 });
+
+// --- Keepalive ---
+// MV3 service workers sleep after ~30s idle, dropping the WebSocket. An alarm
+// fires every ~24s, which both wakes the SW and lets us detect a dropped WS
+// and reconnect. Without this, the user must manually open the extension to
+// wake it before Claude can send commands.
+const KEEPALIVE_PERIOD_MINUTES = 0.4; // 24 seconds
+
+chrome.alarms.create('ws-keepalive', { periodInMinutes: KEEPALIVE_PERIOD_MINUTES });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== 'ws-keepalive') return;
+  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+    connect();
+  } else if (ws.readyState === WebSocket.OPEN && authenticated) {
+    // Lightweight app-level ping so the SW has a recent event to stay alive
+    try { ws.send(JSON.stringify({ type: 'ping', id: `ka_${Date.now()}` })); } catch { /* noop */ }
+  }
+});
+
+// On SW startup (cold start), also try to connect immediately
+chrome.runtime.onStartup.addListener(() => connect());
+chrome.runtime.onInstalled.addListener(() => connect());
 
 // --- Start ---
 connect();
